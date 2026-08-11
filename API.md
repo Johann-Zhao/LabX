@@ -101,13 +101,15 @@ POST /api/return
 GET /api/records?user_id=
 入参: user_id（可选；为空返回全部，供管理员视角）
 返回: { "code": 0, "msg": "ok",
-       "data": [ { "record_id": "R-1024", "user_id": "2024001", "material_id": "S-003",
-                   "material_name": "DHT22 温湿度传感器", "status": "active", "quantity": 1,
+       "data": [ { "record_id": "R-1024", "user_id": "2024001", "user_name": "小王",
+                   "material_id": "S-003", "material_name": "DHT22 温湿度传感器",
+                   "status": "active", "quantity": 1,
                    "review_status": "approved", "review_reason": null,
                    "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-09-10T20:30:00",
                    "returned_at": null } ] }
 ```
 
+`user_name` 为借用人姓名（管理端展示用，用户不存在时回退为 `user_id`）。
 `status` 取值：`pending`（超期借用审核中）/ `active`（借用中）/ `overdue`（逾期）/ `returned`（已归还）/ `rejected`（审核驳回）。
 `review_status` 取值：`approved`（无需审核或已通过）/ `pending`（等待人工审核）/ `rejected`（已驳回）；`review_reason` 为学生申请超期借用时填写的理由。
 

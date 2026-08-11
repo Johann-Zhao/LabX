@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import AdminPage from './views/AdminPage.vue'
 import AskPage from './views/AskPage.vue'
 import BorrowResult from './views/BorrowResult.vue'
 import CardPage from './views/CardPage.vue'
@@ -15,6 +16,7 @@ const router = createRouter({
     { path: '/cards/:id', name: 'card-detail', component: CardPage },
     { path: '/borrow/result', name: 'borrow-result', component: BorrowResult },
     { path: '/bom', redirect: '/ask' }, // 愿望到方案已融合进智能助手对话页
+    { path: '/admin', name: 'admin', component: AdminPage, meta: { title: '管理' } },
     { path: '/ask', name: 'ask', component: AskPage, meta: { title: '智能助手' } },
     { path: '/records', name: 'records', component: RecordsPage, meta: { title: '我的借用' } },
   ],

@@ -102,10 +102,11 @@ def material_dict(m: Material) -> dict:
     }
 
 
-def record_dict(r: BorrowRecord, material_name: str) -> dict:
+def record_dict(r: BorrowRecord, material_name: str, user_name: str | None = None) -> dict:
     return {
         "record_id": r.id,
         "user_id": r.user_id,
+        "user_name": user_name or r.user_id,  # 借用人姓名，查不到时回退为学号
         "material_id": r.material_id,
         "material_name": material_name,
         "quantity": r.quantity,
@@ -204,7 +205,11 @@ def list_records(user_id: str = "", db: Session = Depends(get_db)):
         q = q.filter(BorrowRecord.user_id == user_id)
     records = q.order_by(BorrowRecord.borrowed_at.desc()).all()
     names = {m.id: m.name for m in db.query(Material).all()}
-    return ok("ok", [record_dict(r, names.get(r.material_id, r.material_id)) for r in records])
+    user_names = {u.id: u.name for u in db.query(User).all()}
+    return ok("ok", [
+        record_dict(r, names.get(r.material_id, r.material_id), user_names.get(r.user_id))
+        for r in records
+    ])
 
 
 # ---------- 知识问答（RAG，核心逻辑在 services.py） ----------

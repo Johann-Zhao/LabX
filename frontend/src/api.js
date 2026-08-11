@@ -32,6 +32,12 @@ export async function returnMaterial(recordId) {
   return data
 }
 
+// 超期借用审核（管理端）：approve=true 通过借出并扣库存，false 驳回
+export async function reviewBorrow(recordId, approve) {
+  const { data } = await http.post('/borrow/review', { record_id: recordId, approve })
+  return data
+}
+
 export async function fetchRecords(userId = '') {
   const { data } = await http.get('/records', { params: { user_id: userId } })
   return data
