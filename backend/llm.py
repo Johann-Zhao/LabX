@@ -26,10 +26,14 @@ MOCK_ANSWER = (
 )
 
 
-def chat(system: str, user: str, max_tokens: int = 1024) -> str:
-    """单轮问答，返回文本。任何异常都降级为兜底答案，绝不向上抛。"""
+def chat(system: str, user: str, max_tokens: int = 1024, fallback: str | None = MOCK_ANSWER) -> str | None:
+    """单轮问答，返回文本。任何异常都降级为 fallback，绝不向上抛。
+
+    fallback 默认为通用兜底答案（问答场景直接用）；
+    传 None 表示调用方要自己区分"LLM 不可用"（如 BOM 生成会退回关键词匹配）。
+    """
     if MOCK or not API_KEY:
-        return MOCK_ANSWER
+        return fallback
     try:
         client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=30)
         resp = client.chat.completions.create(
@@ -40,6 +44,6 @@ def chat(system: str, user: str, max_tokens: int = 1024) -> str:
             ],
             max_tokens=max_tokens,
         )
-        return (resp.choices[0].message.content or "").strip() or MOCK_ANSWER
-    except Exception as e:  # 网络不通、key 失效、超时等一律兜底
-        return f"{MOCK_ANSWER}\n（LLM 调用失败已降级：{type(e).__name__}）"
+        return (resp.choices[0].message.content or "").strip() or fallback
+    except Exception:  # 网络不通、key 失效、超时等一律兜底
+        return fallback

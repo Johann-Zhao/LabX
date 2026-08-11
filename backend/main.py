@@ -1,9 +1,7 @@
 """LabX 后端（REST 接口层，全部为薄封装）。
 
-借还状态机与 RAG 问答的核心逻辑在 services.py（REST 与 MCP 共用一份实现）；
-检索见 rag.py，LLM 封装见 llm.py。
-当前 ask / borrow / return / records / materials 为真实实现；
-recommend_bom / experience 仍是假数据（阶段 3 接 LLM 与编排引擎）。
+借还状态机、权限、RAG 问答、BOM 生成、经验沉淀的核心逻辑在 services.py（REST 与 MCP 共用）；
+编排引擎在 orchestrator.py；检索见 rag.py，LLM 封装见 llm.py。
 接口契约见仓库根目录 API.md，改动契约先在群里同步。
 """
 from fastapi import Depends, FastAPI
@@ -11,8 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, display_status
-from services import ask_core, borrow_core, return_core
+from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status
+from services import ask_core, borrow_core, experience_core, recommend_bom_core, return_core
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
@@ -47,6 +45,11 @@ class ExperienceReq(BaseModel):
     user_id: str
     content: str
     record_id: str | None = None  # 归还流程带入，便于关联借用记录
+
+
+class AgentChatReq(BaseModel):
+    user_id: str
+    message: str
 
 
 # ---------- 工具函数 ----------
@@ -142,8 +145,8 @@ def get_material(material_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/borrow")
 def borrow(req: BorrowReq, db: Session = Depends(get_db)):
-    """借用。阶段 1 不启用分级权限拦截（1002/1003 由阶段 3 实现）。"""
-    return borrow_core(db, req.user_id, req.material_id)
+    """借用。进阶级首次借用需安全确认（1002），专业级需教师审批（1003）。"""
+    return borrow_core(db, req.user_id, req.material_id, req.safety_confirmed)
 
 
 @app.post("/api/return")
@@ -170,41 +173,35 @@ def ask(req: AskReq, db: Session = Depends(get_db)):
     return ask_core(req.question, req.material_id)
 
 
-# ---------- 以下仍是假数据（阶段 3 替换为真实实现） ----------
+# ---------- 用户 ----------
+
+@app.get("/api/users")
+def list_users(db: Session = Depends(get_db)):
+    """用户列表（演示切换账号用）。"""
+    return ok("ok", [{"user_id": u.id, "name": u.name} for u in db.query(User).all()])
+
+
+# ---------- 智能体编排 ----------
+
+@app.post("/api/agent/chat")
+def agent_chat_endpoint(req: AgentChatReq, db: Session = Depends(get_db)):
+    """智能体对话：意图识别 → 编排调用 → 综合生成。steps 为中间调用过程（演示展示用）。"""
+    from orchestrator import agent_chat
+    return agent_chat(db, req.user_id, req.message)
+
+
+# ---------- 愿望到方案与经验沉淀（核心逻辑在 services.py） ----------
 
 @app.post("/api/recommend_bom")
-def recommend_bom(req: RecommendBomReq):
-    """愿望到方案（假数据）。阶段 3 接 LLM，物料仅从物料目录中选择。"""
-    return ok("ok", {
-        "project_guess": "土壤湿度监测 + 水泵控制的自动浇花装置",
-        "materials": [
-            {"material_id": "A-017", "name": "Arduino Uno 开发板", "available_quantity": 3, "in_stock": True},
-            {"material_id": "S-007", "name": "土壤湿度传感器", "available_quantity": 6, "in_stock": True},
-            {"material_id": "E-001", "name": "5V 微型水泵", "available_quantity": 3, "in_stock": True},
-            {"material_id": "M-013", "name": "单路继电器模块", "available_quantity": 6, "in_stock": True},
-        ],
-        "skills": [
-            {"name": "Arduino 基础编程", "link": "/materials/A-017"},
-            {"name": "继电器控制原理", "link": "/materials/M-013"},
-        ],
-        "reference_projects": [
-            {"project_id": "P-2025-06", "title": "张XX的自动浇花系统（2025年6月）"},
-            {"project_id": "P-2025-03", "title": "李XX的智能花盆（2025年3月）"},
-        ],
-    })
+def recommend_bom(req: RecommendBomReq, db: Session = Depends(get_db)):
+    """愿望到方案：LLM 从真实物料目录中选件，逐条库存校验。"""
+    return recommend_bom_core(db, req.description, req.user_id)
 
 
 @app.post("/api/experience")
-def share_experience(req: ExperienceReq):
-    """提交使用经验（假数据）。阶段 3 接 LLM 结构化入库。"""
-    return ok("经验已提交，感谢分享", {
-        "tip_id": "TIP-0042",
-        "structured": {
-            "problem": "DHT22 读数一直是 0",
-            "solution": "数据脚接 4.7kΩ 上拉电阻到 VCC",
-            "scenario": "DHT22 首次接线、温湿度数据采集项目",
-        },
-    })
+def share_experience(req: ExperienceReq, db: Session = Depends(get_db)):
+    """提交使用经验：LLM 结构化后写入 tip 卡片并同步向量库。"""
+    return experience_core(db, req.material_id, req.user_id, req.content, req.record_id)
 
 
 if __name__ == "__main__":

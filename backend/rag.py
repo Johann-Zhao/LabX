@@ -76,6 +76,16 @@ def rebuild_from_db(cards) -> int:
     return len(ids)
 
 
+def add_card(card) -> None:
+    """增量索引一张卡片（社区经验入库后调用，避免全量重建）。"""
+    coll = _collection()
+    coll.add(
+        ids=[card.id],
+        documents=[f"{card.title}\n{card.points}\n{card.content or ''}"[:2000]],
+        metadatas=[{"material_id": card.material_id, "card_type": card.card_type}],
+    )
+
+
 def query(question: str, material_id: str | None = None, top_k: int = 3) -> list[dict]:
     """向量检索 top_k 张卡片；material_id 非空时先按物料精确过滤。"""
     coll = _collection()

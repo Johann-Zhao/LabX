@@ -58,7 +58,7 @@ POST /api/borrow
 ```
 
 说明：
-- `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交（**阶段 3 启用**，当前后端不拦截）。
+- `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交（**已生效**）。
 - 进阶级未确认 → `code: 1002`，`data.safety_notice` 为安全要点文案；专业级 → `code: 1003`。
 - 重复借用（同一用户对该物料有未完结记录）→ `code: 1005`，`data.record_id` 为已有记录。
 - 借用成功后 `knowledge_card` 为借用触发推送的单张知识卡片（三要点结构，取该物料的 common_errors 卡片）；该物料没有任何卡片时为 `null`。
@@ -74,7 +74,7 @@ POST /api/return
                  "experience_draft": "这次用 DHT22 测温室数据比较顺利，提醒大家：数据脚一定记得接上拉电阻……" } }
 ```
 
-说明：`experience_draft` 为 AI 预填的心得草稿，前端弹出供学生修改或确认后调 `POST /api/experience` 发布（非强制）。**阶段 3 接入 LLM 前恒为 `null`**。
+说明：`experience_draft` 为 AI 预填的心得草稿，前端弹出供学生修改或确认后调 `POST /api/experience` 发布（非强制）。LLM 不可用时为模板拼装文案，永不为 `null`。
 
 ## 5. 借用流水
 
@@ -126,13 +126,39 @@ POST /api/experience
         "content": "数据脚一定要接上拉电阻，我开始忘了接，读数一直是 0。",
         "record_id": "R-1024" }
 返回: { "code": 0, "msg": "经验已提交，感谢分享",
-       "data": { "tip_id": "TIP-0042",
+       "data": { "tip_id": "KC-TIP-1042",
                  "structured": { "problem": "DHT22 读数一直是 0",
                                  "solution": "数据脚接 4.7kΩ 上拉电阻到 VCC",
                                  "scenario": "DHT22 首次接线、温湿度数据采集项目" } } }
 ```
 
-说明：`structured` 为 LLM 结构化结果（问题/解决方案/适用场景），入库后参与半衰期降权与"有用"投票。`record_id` 可选，归还流程带入。
+说明：`structured` 为 LLM 结构化结果（问题/解决方案/适用场景，LLM 不可用时退回原文截取）。入库为 tip 卡片并同步向量库，下一次借用该物料时以"前一位同学提醒"出现在知识推送首位。`record_id` 可选，归还流程带入。
+
+## 9. 用户列表
+
+```
+GET /api/users
+返回: { "code": 0, "msg": "ok",
+       "data": [ { "user_id": "2024001", "name": "小王" } ] }
+```
+
+## 10. 智能体对话
+
+```
+POST /api/agent/chat
+入参: { "user_id": "2024001", "message": "我的电机不转" }
+返回: { "code": 0, "msg": "ok",
+       "data": { "intent": "troubleshoot",
+                 "steps": [ { "step": "意图识别", "detail": "识别为「故障排查」" },
+                            { "step": "确认借用上下文", "detail": "你当前借用：L298N 电机驱动模块" },
+                            { "step": "检索故障知识库", "detail": "命中《L298N 最容易踩的三个坑》" },
+                            { "step": "确认备件库存", "detail": "备件：L298N 当前可借 2 件，存放于 201室 A柜" } ],
+                 "answer": "最可能原因：逻辑电源与电机电源没分开供电……",
+                 "references": [ { "card_id": "KC-M-011-common_errors", "title": "L298N 最容易踩的三个坑" } ],
+                 "bom": null } }
+```
+
+说明：`intent` 取值 `troubleshoot`（排障）/ `recommend`（求推荐，此时 `bom` 字段为 BOM 结构化数据）/ `inventory`（查库存）/ `chitchat`（走通用 RAG 问答）。`steps` 是编排引擎的中间调用过程，前端用于展示"多能力协作"。
 
 ---
 
@@ -148,4 +174,4 @@ POST /api/experience
 | 1004 | 记录不存在或当前状态不允许该操作 |
 | 1005 | 你已借出该物料（重复借用） |
 
-> 当前状态：materials / borrow / return / records 为真实数据库实现（阶段 1 完成）；ask / recommend_bom / experience 仍为假数据（阶段 2/3 替换）；1002 / 1003 权限拦截由阶段 3 启用。
+> 当前状态：全部接口为真实实现。1002 / 1003 权限拦截已生效（阶段 3）；智能体对话见第 10 节。
