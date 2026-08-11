@@ -145,18 +145,33 @@ def _gen(system: str, user: str, max_tokens: int = 800) -> str | None:
 LOCAL_HIT_THRESHOLD_OPEN = 2.5    # 全库开放检索
 LOCAL_HIT_THRESHOLD_IN_MATERIAL = 1.0  # 已定位物料的物料内检索
 
+# 统一回答格式：本地知识与联网检索的输出结构必须一致（见 docs/agent-workflow.md）
+_ANSWER_FORMAT = (
+    "输出格式（严格遵守，本地与联网回答格式一致）：\n"
+    "①最可能原因（一句话）\n"
+    "②分步排查/操作清单（每步附预期现象，不超过 4 步）\n"
+    "③补充路径（备件位置/深入学习入口，没有可省略）\n"
+)
+
 
 def _ladder_answer(question: str, target, spare_text: str, names: str, steps: list,
                    custom_material: str | None = None) -> tuple[str, list, str]:
-    """返回 (answer, references, provenance)。流程见 docs/agent-workflow.md。"""
+    """返回 (answer, references, provenance)。流程见 docs/agent-workflow.md：
+
+    本地只在"强相关"（型号对应 + 原因对应）时使用；自带物料跳过本地直接联网。
+    """
     query_text = f"{target.name} {question}" if target else question
 
-    # 1. 本地知识库（分数低于阈值视为未命中，防止"随便命中一张不相关卡片"）
-    hits = rag.query(query_text, material_id=target.id if target else None, top_k=3)
-    threshold = LOCAL_HIT_THRESHOLD_IN_MATERIAL if target else LOCAL_HIT_THRESHOLD_OPEN
-    hits = [h for h in hits if h["score"] >= threshold]
-    if not hits and target:
-        hits = [h for h in rag.query(query_text, top_k=3) if h["score"] >= LOCAL_HIT_THRESHOLD_OPEN]
+    # 1. 本地知识库：仅当型号对应（目录内物料）。自带物料无型号对应，直接跳过
+    hits = []
+    if custom_material:
+        steps.append({"step": "自带物料，本地无对应型号", "detail": "跳过本地，直接联网检索"})
+    else:
+        hits = rag.query(query_text, material_id=target.id if target else None, top_k=3)
+        threshold = LOCAL_HIT_THRESHOLD_IN_MATERIAL if target else LOCAL_HIT_THRESHOLD_OPEN
+        hits = [h for h in hits if h["score"] >= threshold]
+        if not hits and target:
+            hits = [h for h in rag.query(query_text, top_k=3) if h["score"] >= LOCAL_HIT_THRESHOLD_OPEN]
     if hits:
         # 引用卫生：只保留"与最高分同物料"或"分数接近最高分（≥60%）"的，防止无关卡片混入参考列表
         top_score = hits[0]["score"]
@@ -164,39 +179,33 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
         hits = [h for h in hits if h.get("material_id") == top_material or h["score"] >= top_score * 0.6]
         steps.append({"step": "本地知识库命中", "detail": "、".join(f"《{h['title']}》" for h in hits)})
         context = "\n\n".join(f"【{h['title']}】\n{h['text']}" for h in hits)
-        # 用户自带物料但本地只有相关物料的资料：必须披露假设，不能假装本地收录了该物料
-        disclosure = (
-            f"注意：学生的物料「{custom_material}」本地没有专属资料，检索到的是相关物料的资料。"
-            "回答开头必须声明这个假设（如「本地没有它的专属资料，以下按最相关的方案排查」），"
-            "结尾提示学生：如果实际驱动/接线不同，告诉我具体型号我再细查。"
-            if custom_material else ""
-        )
         raw = _gen(
-            "你是高校创新空间的排障/答疑专家。根据给定的知识片段回答，给出最可能原因 + 分步排查/操作清单"
-            + (" + 备件路径。" if spare_text else "。")
-            + "语气直接、给操作指令，250 字以内。" + disclosure,
+            "你是高校创新空间的排障/答疑专家。只根据给定的知识片段回答，"
+            "语气直接、给操作指令，250 字以内。\n" + _ANSWER_FORMAT,
             f"学生问题：{question}\n借用上下文：{names}\n{spare_text}\n知识片段：\n{context}",
         )
         refs = [{"card_id": h["card_id"], "title": h["title"], "url": None} for h in hits]
         return (raw or llm.MOCK_ANSWER, refs, "local_kb" if raw else "offline")
 
-    # 2. 联网检索（优先 DeepSeek 原生 web_search，失败退回 DuckDuckGo）
+    # 2. 联网检索（优先 DeepSeek 原生 web_search，失败退回 DuckDuckGo；均要求优先官方资料）
     raw = llm.chat_with_search(
-        "你是高校创新空间的助教。基于联网搜索到的资料回答学生问题，给出可操作的步骤，200 字以内。",
+        "你是高校创新空间的助教。基于联网搜索到的资料回答学生问题，"
+        "优先采用官方资料（厂商文档、数据手册、官方教程）的内容，250 字以内。\n" + _ANSWER_FORMAT,
         f"学生问题：{question}",
     )
     if raw:
-        steps.append({"step": "本地未收录，已联网检索", "detail": "DeepSeek 原生联网搜索"})
+        steps.append({"step": "本地未收录，已联网检索", "detail": "DeepSeek 原生联网搜索（官方资料优先）"})
         urls = re.findall(r"https?://[^\s\)\]>\"，。]+", raw)
         refs = [{"card_id": None, "title": u.split("/")[2] if "/" in u else u, "url": u} for u in urls[:3]]
         return raw, refs, "web"
     results = web_search(query_text)
     if results:
-        steps.append({"step": "本地未收录，已联网检索", "detail": f"找到 {len(results)} 条网络资料"})
+        steps.append({"step": "本地未收录，已联网检索", "detail": f"找到 {len(results)} 条网络资料（官方域名优先）"})
         snippets = "\n".join(f"- {r['title']}：{r['snippet']}" for r in results)
         raw = _gen(
-            "你是高校创新空间的助教。根据联网检索到的资料摘要回答学生问题，给出可操作的步骤，"
-            "200 字以内。资料与问题不相关就凭通用知识回答。",
+            "你是高校创新空间的助教。根据联网检索到的资料摘要回答学生问题，"
+            "优先采用官方资料（厂商文档、数据手册、官方教程）的内容；资料与问题不相关就凭通用知识回答。"
+            "250 字以内。\n" + _ANSWER_FORMAT,
             f"学生问题：{question}\n网络资料摘要：\n{snippets}",
         )
         refs = [{"card_id": None, "title": r["title"], "url": r["url"]} for r in results]
