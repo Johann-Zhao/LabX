@@ -134,11 +134,12 @@ def push_card_dict(db: Session, material_id: str) -> dict | None:
 
 
 def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: bool = False,
-                days: int = DEFAULT_BORROW_DAYS, reason: str = "") -> dict:
+                days: int = DEFAULT_BORROW_DAYS, reason: str = "", quantity: int = 1) -> dict:
     """借用状态机（见方案文档 4.2 节 + 5.6 节分级权限 + API.md 第 3 节借期分级审核）。
 
-    days ≤ 30：直接借出（active，库存 -1）；days > 30：需 reason，创建待审核记录
+    days ≤ 30：直接借出（active，库存 -quantity）；days > 30：需 reason，创建待审核记录
     （pending，不扣库存、不算借用中），审核通过才借出（见 review_borrow_core）。
+    quantity 为一次借用的件数（BOM 一键预约按清单数量约），一条记录记 quantity 件。
     """
     m = db.get(Material, material_id)
     if m is None:
@@ -146,6 +147,10 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
     if db.get(User, user_id) is None:
         return _resp(404, f"用户 {user_id} 不存在")
     days = max(1, min(int(days or DEFAULT_BORROW_DAYS), MAX_BORROW_DAYS))
+    try:
+        quantity = max(1, min(int(quantity or 1), 10))
+    except (TypeError, ValueError):
+        quantity = 1
     if days > REVIEW_THRESHOLD_DAYS and not reason.strip():
         return _resp(1006, f"借用超过 {REVIEW_THRESHOLD_DAYS} 天需填写申请理由")
     # 重复借用：同一用户对该物料有未完结记录（借用中/待审核）→ 提示先归还
@@ -164,8 +169,8 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
         return _resp(1003, "专业级物料需教师审批，请联系实验室老师办理", {"notice": perm["notice"]})
     if perm["result"] == "need_safety_confirm" and not safety_confirmed:
         return _resp(1002, "首次借用该类物料，请完成安全确认", {"safety_notice": perm["notice"]})
-    if m.available_quantity < 1:
-        return _resp(1001, "库存不足，可加入预约等待队列")
+    if m.available_quantity < quantity:
+        return _resp(1001, f"库存不足：需要 {quantity} 件，仅剩 {m.available_quantity} 件")
 
     now = datetime.now()
     needs_review = days > REVIEW_THRESHOLD_DAYS
@@ -173,7 +178,7 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
         id=next_record_id(db),
         user_id=user_id,
         material_id=m.id,
-        quantity=1,
+        quantity=quantity,
         status="pending" if needs_review else "active",
         borrowed_at=now,
         due_at=now + timedelta(days=days),
@@ -181,13 +186,14 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
         review_reason=reason.strip() if needs_review else None,
     )
     if not needs_review:
-        m.available_quantity -= 1  # 待审核不扣库存，审核通过时才扣
+        m.available_quantity -= quantity  # 待审核不扣库存，审核通过时才扣
     db.add(record)
     db.commit()
     if needs_review:
         return _resp(0, "已提交审核：超期借用申请已收到，审核通过后才算借出", {
             "record_id": record.id,
             "material_id": m.id,
+            "quantity": quantity,
             "status": "pending",
             "review_status": "pending",
             "borrowed_at": record.borrowed_at.isoformat(),
@@ -197,6 +203,7 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
     return _resp(0, "借用成功", {
         "record_id": record.id,
         "material_id": m.id,
+        "quantity": quantity,
         "status": "active",
         "review_status": "approved",
         "borrowed_at": record.borrowed_at.isoformat(),
@@ -208,7 +215,7 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
 def review_borrow_core(db: Session, record_id: str, approve: bool) -> dict:
     """超期借用审核（管理端，演示用 /docs 调用）。
 
-    通过：转 active、库存 -1，借期自通过时刻起算（天数=申请时的天数），补推知识卡片；
+    通过：转 active、库存 -quantity，借期自通过时刻起算（天数=申请时的天数），补推知识卡片；
     驳回：转 rejected，不扣库存。仅 pending 记录可审，其他状态 → 1004。
     """
     r = db.get(BorrowRecord, record_id)
@@ -221,16 +228,17 @@ def review_borrow_core(db: Session, record_id: str, approve: bool) -> dict:
         r.review_status = "rejected"
         db.commit()
         return _resp(0, "已驳回", {"record_id": r.id, "status": "rejected", "review_status": "rejected"})
+    qty = r.quantity or 1
     m = db.get(Material, r.material_id)
-    if m is None or m.available_quantity < 1:
-        return _resp(1001, "库存不足，暂无法通过该申请")
+    if m is None or m.available_quantity < qty:
+        return _resp(1001, f"库存不足：需要 {qty} 件，仅剩 {m.available_quantity if m else 0} 件，暂无法通过")
     days = max(1, (r.due_at - r.borrowed_at).days)
     now = datetime.now()
     r.status = "active"
     r.review_status = "approved"
     r.borrowed_at = now  # 借期自审核通过起算
     r.due_at = now + timedelta(days=days)
-    m.available_quantity -= 1
+    m.available_quantity -= qty
     db.commit()
     return _resp(0, "已通过，物料借出", {
         "record_id": r.id,
@@ -256,7 +264,7 @@ def return_core(db: Session, record_id: str) -> dict:
     r.returned_at = datetime.now()
     m = db.get(Material, r.material_id)
     if m is not None:
-        m.available_quantity += 1
+        m.available_quantity += (r.quantity or 1)  # 按记录上的件数回补库存
     db.commit()
     return _resp(0, "归还成功", {
         "record_id": r.id,

@@ -49,10 +49,10 @@ GET /api/materials/{material_id}
 ```
 POST /api/borrow
 入参: { "user_id": "2024001", "material_id": "A-017", "safety_confirmed": false,
-        "days": 30, "reason": "" }
+        "days": 30, "reason": "", "quantity": 1 }
 返回: { "code": 0, "msg": "借用成功",
        "data": { "record_id": "R-1024", "material_id": "A-017", "status": "active",
-                 "review_status": "approved",
+                 "review_status": "approved", "quantity": 1,
                  "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-09-10T20:30:00",
                  "knowledge_card": { "card_id": "KC-S003-ERR", "title": "DHT22 最易错点",
                                      "points": ["最易错点...", "关联物料...", "深入入口..."],
@@ -63,6 +63,7 @@ POST /api/borrow
 - `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交（**已生效**）。
 - 进阶级未确认 → `code: 1002`，`data.safety_notice` 为安全要点文案；专业级 → `code: 1003`。
 - 重复借用（同一用户对该物料有未完结记录）→ `code: 1005`，`data.record_id` 为已有记录。
+- `quantity`：一次借用件数，可选，默认 1，范围 1~10；一条记录记 N 件，库存按 N 扣减/回补。库存不足 N 件 → `code: 1001`（`msg` 注明需要与仅剩件数）。
 - `days`：借用天数，可选，默认 30，允许范围 1~180（超出自动截断）。**≤ 30 天直接借出**（`status=active, review_status=approved`）；**> 30 天需人工审核**：
   - 未填 `reason` → `code: 1006`（不产生记录）；
   - 填了 `reason` → 创建 `status=pending, review_status=pending` 的申请记录，**不扣库存、不算借用中**，`knowledge_card` 为 `null`，`msg` 为"已提交审核"。审核见第 3.1 节。
@@ -79,7 +80,7 @@ POST /api/borrow/review
                  "knowledge_card": { …同借用推送… } } }
 ```
 
-说明：仅对 `status=pending` 的记录有效，其他状态 → `code: 1004`。通过：记录转 `active`、库存 -1，**借期自审核通过时刻起算**（天数 = 申请时的 days），并补推知识卡片；驳回：`status=rejected, review_status=rejected`，不扣库存。演示时不做管理端 UI，用 `/docs` 页面调用。
+说明：仅对 `status=pending` 的记录有效，其他状态 → `code: 1004`。通过：记录转 `active`、按记录上的 `quantity` 扣库存（不足则 `code: 1001`），**借期自审核通过时刻起算**（天数 = 申请时的 days），并补推知识卡片；驳回：`status=rejected, review_status=rejected`，不扣库存。演示时不做管理端 UI，用 `/docs` 页面调用。
 
 ## 4. 归还
 
@@ -101,7 +102,7 @@ GET /api/records?user_id=
 入参: user_id（可选；为空返回全部，供管理员视角）
 返回: { "code": 0, "msg": "ok",
        "data": [ { "record_id": "R-1024", "user_id": "2024001", "material_id": "S-003",
-                   "material_name": "DHT22 温湿度传感器", "status": "active",
+                   "material_name": "DHT22 温湿度传感器", "status": "active", "quantity": 1,
                    "review_status": "approved", "review_reason": null,
                    "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-09-10T20:30:00",
                    "returned_at": null } ] }

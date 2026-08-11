@@ -15,11 +15,14 @@ export async function fetchMaterial(materialId) {
   return data
 }
 
-export async function borrowMaterial(userId, materialId, safetyConfirmed = false) {
+export async function borrowMaterial(userId, materialId, safetyConfirmed = false, days = 30, reason = '', quantity = 1) {
   const { data } = await http.post('/borrow', {
     user_id: userId,
     material_id: materialId,
     safety_confirmed: safetyConfirmed,
+    days,
+    reason,
+    quantity,
   })
   return data
 }

@@ -4,12 +4,18 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { borrowMaterial, fetchMaterial } from '../api'
 import { currentUser, lastBorrowResult } from '../store'
+import BorrowDialog from '../components/BorrowDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const material = ref(null)
 const loading = ref(true)
 const borrowing = ref(false)
+
+// 借期选择（≤30 天直接借出，>30 天填理由转人工审核）
+const durationDialog = ref(false)
+const borrowDays = ref(30)
+const borrowReason = ref('')
 
 const LEVEL_TYPE = { basic: 'success', advanced: 'warning', professional: 'danger' }
 const LEVEL_TEXT = { basic: '基础级', advanced: '进阶级', professional: '专业级' }
@@ -31,23 +37,27 @@ onMounted(async () => {
 })
 
 async function onBorrow() {
-  try {
-    await ElMessageBox.confirm(
-      `确认借用「${material.value.name}」？借用记录将与你的账号绑定。`,
-      '确认借用',
-      { confirmButtonText: '确认借用', cancelButtonText: '再想想', type: 'info' }
-    )
-  } catch {
-    return // 用户点了取消
-  }
+  durationDialog.value = true // 先选借期，确认后在 onDurationConfirm 里发起借用
+}
+
+async function onDurationConfirm({ days, reason }) {
+  borrowDays.value = days
+  borrowReason.value = reason
   await doBorrow(false)
 }
 
 async function doBorrow(safetyConfirmed) {
   borrowing.value = true
   try {
-    const res = await borrowMaterial(currentUser.id, material.value.material_id, safetyConfirmed)
-    if (res.code === 0) {
+    const res = await borrowMaterial(
+      currentUser.id, material.value.material_id, safetyConfirmed, borrowDays.value, borrowReason.value
+    )
+    if (res.code === 0 && res.data.status === 'pending') {
+      // 超期借用：已提交人工审核，不算借出
+      safetyDialog.value = false
+      ElMessageBox.alert(res.msg, '已提交审核', { confirmButtonText: '查看我的借用', type: 'info' })
+        .then(() => router.push('/records')).catch(() => {})
+    } else if (res.code === 0) {
       Object.assign(lastBorrowResult, {
         record_id: res.data.record_id,
         material_id: material.value.material_id,
@@ -132,6 +142,9 @@ async function doBorrow(safetyConfirmed) {
           问问 AI（该物料专属助教）
         </el-button>
       </el-card>
+
+      <!-- 借期选择：≤30 天直接借出，>30 天填理由转人工审核 -->
+      <BorrowDialog v-model="durationDialog" :title="`借用「${material.name}」`" @confirm="onDurationConfirm" />
 
       <!-- 进阶级物料首次借用：10 秒安全确认（一屏要点 + 勾选） -->
       <el-dialog v-model="safetyDialog" title="安全确认（首次借用该类物料）" width="90%">

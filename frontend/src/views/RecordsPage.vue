@@ -18,7 +18,8 @@ const STATUS_META = {
   active: { text: '借用中', type: 'primary' },
   overdue: { text: '已逾期', type: 'danger' },
   returned: { text: '已归还', type: 'info' },
-  pending: { text: '待审批', type: 'warning' },
+  pending: { text: '审核中', type: 'warning' },
+  rejected: { text: '已驳回', type: 'info' },
 }
 
 function fmt(iso) {
@@ -104,7 +105,7 @@ onMounted(load)
   <div v-loading="loading" class="list">
     <el-card v-for="r in records" :key="r.record_id" class="card" shadow="never">
       <div class="row">
-        <span class="name">{{ r.material_name }}</span>
+        <span class="name">{{ r.material_name }}<template v-if="r.quantity > 1"> ×{{ r.quantity }}</template></span>
         <el-tag :type="STATUS_META[r.status]?.type || 'info'" size="small">
           {{ STATUS_META[r.status]?.text || r.status }}
         </el-tag>
@@ -115,6 +116,7 @@ onMounted(load)
         <span>应还 {{ fmt(r.due_at) }}</span>
         <span v-if="r.returned_at">实还 {{ fmt(r.returned_at) }}</span>
       </div>
+      <div v-if="r.review_reason" class="reason">申请理由：{{ r.review_reason }}</div>
       <el-button
         v-if="r.status === 'active' || r.status === 'overdue'"
         type="primary"
@@ -169,6 +171,11 @@ onMounted(load)
   color: #606266;
   font-size: 13px;
   margin-top: 8px;
+}
+.reason {
+  color: #909399;
+  font-size: 12px;
+  margin-top: 6px;
 }
 .btn {
   margin-top: 10px;

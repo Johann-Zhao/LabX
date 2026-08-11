@@ -28,6 +28,7 @@ class BorrowReq(BaseModel):
     safety_confirmed: bool = False  # 进阶级首次借用需勾选"我已知晓"（阶段 3 启用）
     days: int = 30  # 借期（天），>30 需填 reason 并人工审核（API.md 第 3 节）
     reason: str = ""  # 超期借用申请理由
+    quantity: int = 1  # 一次借用件数（BOM 一键预约按清单数量约）
 
 
 class ReviewReq(BaseModel):
@@ -107,6 +108,7 @@ def record_dict(r: BorrowRecord, material_name: str) -> dict:
         "user_id": r.user_id,
         "material_id": r.material_id,
         "material_name": material_name,
+        "quantity": r.quantity,
         "status": display_status(r),  # overdue 由读取时动态判断
         "review_status": r.review_status,  # approved/pending/rejected
         "review_reason": r.review_reason,
@@ -179,7 +181,7 @@ def get_card(card_id: str, db: Session = Depends(get_db)):
 def borrow(req: BorrowReq, db: Session = Depends(get_db)):
     """借用。进阶级首次借用需安全确认（1002），专业级需教师审批（1003）；
     借期 >30 天需填理由（否则 1006）并转人工审核（pending，不扣库存）。"""
-    return borrow_core(db, req.user_id, req.material_id, req.safety_confirmed, req.days, req.reason)
+    return borrow_core(db, req.user_id, req.material_id, req.safety_confirmed, req.days, req.reason, req.quantity)
 
 
 @app.post("/api/borrow/review")
