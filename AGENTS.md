@@ -71,17 +71,15 @@ cd frontend && npm run dev        # http://localhost:5173，/api 由 vite proxy 
 
 - [x] 阶段 0：骨架 + API 契约 + 假接口（commit `5f39399`）
 - [x] 阶段 1：借还 MVP —— 三表 + 真实借还接口 + 前端四页面，v0.1 浏览器走查通过（commits `d04427b`/`4e8b18d`/`2dbb569`）
-- [ ] 阶段 2：Chroma 灌库 + RAG 问答 + 借用弹知识卡片 + FastMCP 封装 ← **当前在这里**
-- [ ] 阶段 3：编排引擎（排障对话）+ recommend_bom 接 LLM + 归还心得草稿 + 分级权限
+- [x] 阶段 2：知识服务 —— 33 卡片入库、借用返回真卡片、RAG 问答（本地 n-gram 向量 + DeepSeek）、FastMCP 双 Server、前端问答页，v0.2 浏览器走查通过（commits `2a68970`/`a0af620`/`b5f76f9` 起）
+- [ ] 阶段 3：编排引擎（排障对话）+ recommend_bom 接 LLM + 归还心得草稿 + 分级权限 ← **当前在这里**
 - [ ] 阶段 4：演示数据灌满 + 全流程测试 + 部署固化 + 录视频
 
-**阶段 2 待办细节**（做完划掉）：
-1. `db.py` 增加 knowledge_cards 表（照附录 A：id/material_id/card_type/title/content/media_urls/contributor_id/helpful_count/created_at）
-2. `init_db.py` 扩展：读 `deta/cards/*.md`（C 产出，front-matter 带 material_id/card_type）灌入知识卡片；先用 3 张 DHT22 样例卡片跑通
-3. `borrow` 返回真实 knowledge_card：按 material_id 查 common_errors 类型卡片，content 拆三要点
-4. `llm.py`：OpenAI 兼容客户端封装，读 `.env` 的 LABX_* 配置，`LABX_LLM_MOCK=true` 时返回预置答案
-5. `rag.py`：Chroma 灌库（每卡片一 document，metadata 带 material_id/card_type）+ 检索函数
-6. `ask` 接 RAG：material_id 精确过滤 + 向量 top-3 → 拼 prompt → LLM 生成（带引用）
-7. FastMCP 薄封装 material / knowledge 两组工具（`backend/mcp_servers/`）
-8. 前端：问答页（/ask）；借用结果页知识卡片已预留（knowledge_card 非空即展示）
-9. v0.2 验收：借 DHT22 弹出"数据脚必须接上拉电阻"卡片；问答页提问引用正确卡片；断外网问答返回兜底不报错
+**阶段 3 待办细节**（做完划掉）：
+1. 编排引擎 `orchestrator.py`：意图分类（查库存/求推荐/排障/闲聊）→ 排障分支：取用户借用清单 → 检索故障知识 → 查备件 → 综合生成；新接口 `POST /api/agent/chat`，返回回答 + 中间调用过程列表（演示要展示调用链）
+2. `user-mcp`：authenticate_user / get_skill_passport / check_borrow_permission / get_user_stats 四个工具
+3. `recommend_bom` 接 LLM：物料目录塞进 prompt 限定选择范围、强制 JSON 输出；结果逐条真实查库存；前端 BOM 展示页 + 一键预约（循环调 borrow）
+4. 归还心得：`return_core` 返回真实 experience_draft（LLM 按物料+借用时长+常见错误生成）；前端归还后弹草稿编辑框，确认调 `/api/experience` 写入 tip 卡片
+5. 分级权限：advanced 首次借用弹安全确认（1002，需记录用户已确认的物料类别）；professional 创建 pending 记录 + 教师审批接口（1003）
+6. 前端：排障对话窗（复用 AskPage 改造，展示中间调用过程）、安全确认弹窗、用户切换（2024001/2024002）
+7. v1.0 验收：四幕剧本全流程——愿望→BOM→预约 / 借用→弹卡片 / "电机不转"→排障（含调用过程）/ 归还→心得草稿→换账号借同一物料看到心得
