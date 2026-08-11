@@ -4,13 +4,16 @@ main.py 的 REST 接口和 mcp_servers/ 的 MCP 工具都调用这里，
 保证状态机只有一份实现（AGENTS.md 第 6 节）。
 """
 import json
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from db import BorrowRecord, KnowledgeCard, Material, User
 
-BORROW_DAYS = 14  # 借用时长：两周（应还时间 = 借用时间 + 14 天）
+DEFAULT_BORROW_DAYS = 30  # 默认借期（≤30 天免审核）
+MAX_BORROW_DAYS = 180  # 借期上限（一学期）
+REVIEW_THRESHOLD_DAYS = 30  # 超过该天数需填写理由 + 人工审核
 
 
 def _resp(code: int, msg: str, data=None) -> dict:
@@ -130,20 +133,30 @@ def push_card_dict(db: Session, material_id: str) -> dict | None:
     }
 
 
-def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: bool = False) -> dict:
-    """借用状态机（见方案文档 4.2 节 + 5.6 节分级权限）。"""
+def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: bool = False,
+                days: int = DEFAULT_BORROW_DAYS, reason: str = "") -> dict:
+    """借用状态机（见方案文档 4.2 节 + 5.6 节分级权限 + API.md 第 3 节借期分级审核）。
+
+    days ≤ 30：直接借出（active，库存 -1）；days > 30：需 reason，创建待审核记录
+    （pending，不扣库存、不算借用中），审核通过才借出（见 review_borrow_core）。
+    """
     m = db.get(Material, material_id)
     if m is None:
         return _resp(404, f"物料 {material_id} 不存在")
     if db.get(User, user_id) is None:
         return _resp(404, f"用户 {user_id} 不存在")
-    # 重复借用：同一用户对该物料有未完结记录（借用中/待审批）→ 提示先归还
+    days = max(1, min(int(days or DEFAULT_BORROW_DAYS), MAX_BORROW_DAYS))
+    if days > REVIEW_THRESHOLD_DAYS and not reason.strip():
+        return _resp(1006, f"借用超过 {REVIEW_THRESHOLD_DAYS} 天需填写申请理由")
+    # 重复借用：同一用户对该物料有未完结记录（借用中/待审核）→ 提示先归还
     existing = db.query(BorrowRecord).filter(
         BorrowRecord.user_id == user_id,
         BorrowRecord.material_id == material_id,
         BorrowRecord.status.in_(["active", "pending"]),
     ).first()
     if existing is not None:
+        if existing.status == "pending":
+            return _resp(1005, "该物料的借用申请正在审核中，请耐心等候", {"record_id": existing.id})
         return _resp(1005, "你已借出该物料，请先归还", {"record_id": existing.id})
     # 分级权限
     perm = check_permission_core(db, user_id, material_id)
@@ -155,24 +168,76 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
         return _resp(1001, "库存不足，可加入预约等待队列")
 
     now = datetime.now()
+    needs_review = days > REVIEW_THRESHOLD_DAYS
     record = BorrowRecord(
         id=next_record_id(db),
         user_id=user_id,
         material_id=m.id,
         quantity=1,
-        status="active",
+        status="pending" if needs_review else "active",
         borrowed_at=now,
-        due_at=now + timedelta(days=BORROW_DAYS),
+        due_at=now + timedelta(days=days),
+        review_status="pending" if needs_review else "approved",
+        review_reason=reason.strip() if needs_review else None,
     )
-    m.available_quantity -= 1
+    if not needs_review:
+        m.available_quantity -= 1  # 待审核不扣库存，审核通过时才扣
     db.add(record)
     db.commit()
+    if needs_review:
+        return _resp(0, "已提交审核：超期借用申请已收到，审核通过后才算借出", {
+            "record_id": record.id,
+            "material_id": m.id,
+            "status": "pending",
+            "review_status": "pending",
+            "borrowed_at": record.borrowed_at.isoformat(),
+            "due_at": record.due_at.isoformat(),
+            "knowledge_card": None,  # 审核通过借出时才推送
+        })
     return _resp(0, "借用成功", {
         "record_id": record.id,
         "material_id": m.id,
         "status": "active",
+        "review_status": "approved",
         "borrowed_at": record.borrowed_at.isoformat(),
         "due_at": record.due_at.isoformat(),
+        "knowledge_card": push_card_dict(db, m.id),
+    })
+
+
+def review_borrow_core(db: Session, record_id: str, approve: bool) -> dict:
+    """超期借用审核（管理端，演示用 /docs 调用）。
+
+    通过：转 active、库存 -1，借期自通过时刻起算（天数=申请时的天数），补推知识卡片；
+    驳回：转 rejected，不扣库存。仅 pending 记录可审，其他状态 → 1004。
+    """
+    r = db.get(BorrowRecord, record_id)
+    if r is None:
+        return _resp(404, f"借用记录 {record_id} 不存在")
+    if r.status != "pending":
+        return _resp(1004, "该记录不在待审核状态，无需操作")
+    if not approve:
+        r.status = "rejected"
+        r.review_status = "rejected"
+        db.commit()
+        return _resp(0, "已驳回", {"record_id": r.id, "status": "rejected", "review_status": "rejected"})
+    m = db.get(Material, r.material_id)
+    if m is None or m.available_quantity < 1:
+        return _resp(1001, "库存不足，暂无法通过该申请")
+    days = max(1, (r.due_at - r.borrowed_at).days)
+    now = datetime.now()
+    r.status = "active"
+    r.review_status = "approved"
+    r.borrowed_at = now  # 借期自审核通过起算
+    r.due_at = now + timedelta(days=days)
+    m.available_quantity -= 1
+    db.commit()
+    return _resp(0, "已通过，物料借出", {
+        "record_id": r.id,
+        "status": "active",
+        "review_status": "approved",
+        "borrowed_at": r.borrowed_at.isoformat(),
+        "due_at": r.due_at.isoformat(),
         "knowledge_card": push_card_dict(db, m.id),
     })
 
@@ -237,60 +302,144 @@ def ask_core(question: str, material_id: str | None = None, top_k: int = 3) -> d
     })
 
 
-# ---------- 愿望到方案（语义转译，方案 5.2 节） ----------
+# ---------- 愿望到方案（语义转译，方案 5.2 节 + docs/agent-workflow.md） ----------
+
+def bigrams(text: str) -> set[str]:
+    return {text[i : i + 2] for i in range(len(text) - 1)}
+
+# 通用词二元组（"模块""传感器"这类词不构成定位依据，排除防误配）
+GENERIC_BIGRAMS: set[str] = set()
+for _w in ["模块", "传感器", "开发板", "套装", "设备", "工具", "耗材"]:
+    GENERIC_BIGRAMS |= bigrams(_w)
+
+
+def score_material(m: Material, message: str) -> int:
+    """消息与物料的相关度：全名 > 型号 > 特征二元组。"""
+    score = 0
+    if m.name in message:
+        score += 10
+    model_token = (m.model or "").split()[0] if m.model else ""
+    if model_token and model_token.lower() in message.lower():
+        score += 5
+    salient = (bigrams(m.name) | bigrams(m.model or "")) - GENERIC_BIGRAMS
+    score += sum(1 for g in salient if g in message)
+    return score
+
 
 def recommend_bom_core(db: Session, description: str, user_id: str | None = None) -> dict:
-    """自然语言项目描述 → 库存校验后的物料清单 + 技能路径。
+    """自然语言项目描述 → 全链路方案 + 完整 BOM（在库/需购标记）+ 技能路径。
 
-    关键技巧（指南）：把物料目录塞进 prompt，LLM 只能从中选择，不产生幻觉物料。
-    LLM 不可用或输出异常时退回关键词匹配，接口永远可用。
+    LLM 按项目真实需要自由列完整物料清单（不限于目录，任何组合都能接住），
+    并自行判断每件是否对应目录物料（catalog_id 由后端校验，编造无效）；
+    接不住的愿望（火箭/真赛车等）幽默回应。LLM 不可用或输出异常时退回关键词匹配，接口永远可用。
     """
     import llm
 
     materials = db.query(Material).all()
     by_id = {m.id: m for m in materials}
-    catalog = [
-        {"material_id": m.id, "name": m.name, "category": m.category, "description": m.description}
-        for m in materials
-    ]
+    catalog = [{"material_id": m.id, "name": m.name, "category": m.category} for m in materials]
 
     system = (
-        "你是高校创新空间的物料专家。根据学生的项目描述，从给定物料目录中挑选所需物料。"
-        "只输出一个 JSON 对象，不要输出任何其他内容：\n"
-        '{"project_guess": "一句话概括项目方案", "material_ids": ["目录中存在的material_id"], '
+        "你是高校创新空间的项目导师，带学生把想法做成实物。根据学生的项目想法和实验室物料目录，"
+        "只输出一个 JSON 对象：\n"
+        "可行项目输出：\n"
+        '{"feasible": true, "project_guess": "一句话方案名", '
+        '"assumption": "方案基于的默认配置假设（一句话，句尾不带标点）", '
+        '"plan": ["全链路实现步骤，4-6 步，每步一句话、不带序号不含换行，覆盖结构搭建/硬件接线/代码逻辑/调试里程碑"], '
+        '"bom": [{"name": "物料通用名称", "spec": "规格型号建议", "quantity": 1, "purpose": "用途，4-8字", '
+        '"catalog_id": "目录中的物料ID或null"}], '
         '"skills": ["需要掌握的技能，2-4个"]}\n'
-        "规则：只能从目录里选，不要编造目录没有的物料；选 3-6 件核心物料。"
+        "bom 要列全链路真实所需的全部物料（8-15 件，含主控/传感器/执行器/结构件/电源/线材耗材），"
+        "不要局限于实验室目录；catalog_id 只能从给定目录里选（与目录物料确是同一类东西才填），"
+        "目录没有对应物就填 null，不要编造 ID。\n"
+        "明显接不住的项目（高危、需资质、成本远超学生项目，如造真赛车、火箭、光刻机）输出：\n"
+        '{"feasible": false, "reply": "幽默风趣的回应（120 字以内）：先幽默点出难度，'
+        '再给出一个能在创新空间落地的替代/简化项目建议"}'
     )
-    user = f"物料目录：\n{json.dumps(catalog, ensure_ascii=False)}\n\n学生项目：{description}"
-    data = parse_json_loose(llm.chat(system, user, max_tokens=1500, fallback=None))
+    user = f"实验室物料目录：\n{json.dumps(catalog, ensure_ascii=False)}\n\n学生项目：{description}"
+    data = parse_json_loose(llm.chat(system, user, max_tokens=3000, fallback=None, timeout=60))
 
-    material_ids: list[str] = []
-    project_guess, skills = "", []
-    if data and isinstance(data.get("material_ids"), list):
-        material_ids = [mid for mid in data["material_ids"] if mid in by_id]  # 只保留真实存在的
+    if data and data.get("feasible") is False and data.get("reply"):
+        return _resp(0, "ok", {
+            "feasible": False, "reply": str(data["reply"]),
+            "project_guess": "", "assumption": "", "plan": [],
+            "materials": [], "skills": [], "reference_projects": [],
+        })
+
+    project_guess, assumption, plan, skills = "", "", [], []
+    out_materials: list[dict] = []
+    if data and isinstance(data.get("bom"), list) and data["bom"]:
         project_guess = str(data.get("project_guess") or "")
+        assumption = str(data.get("assumption") or "").rstrip("。，, ")
+        # plan 条目可能带序号或混入字面 \n，统一清洗成干净短句
+        for s in data.get("plan", []):
+            text = str(s).replace("\\n", "\n").replace("\\r", "\n")  # 字面转义序列先归一成真换行
+            for piece in re.split(r"\n+", text):
+                piece = re.sub(r"^\s*\d+\s*[.、．]\s*", "", piece).strip().strip("\\").strip("；; ")
+                if piece:
+                    plan.append(piece)
+        plan = plan[:6]
         skills = [str(s) for s in data.get("skills", [])][:4]
+        lab_rows: dict[str, dict] = {}  # material_id → 行（同一件目录物料合并成一行）
+        for it in data["bom"][:15]:
+            if not isinstance(it, dict) or not it.get("name"):
+                continue
+            try:
+                qty = max(1, min(int(it.get("quantity") or 1), 20))
+            except (TypeError, ValueError):
+                qty = 1
+            m = by_id.get(str(it.get("catalog_id") or ""))  # 只认目录里真实存在的 ID
+            if m is not None:
+                if m.id in lab_rows:  # 同一目录物料被引用多次：数量合并
+                    row = lab_rows[m.id]
+                    row["quantity"] = min(row["quantity"] + qty, 20)
+                    purpose = str(it.get("purpose") or "")
+                    if purpose and purpose not in row["purpose"]:
+                        row["purpose"] += "；" + purpose
+                    continue
+                row = {
+                    "material_id": m.id, "name": m.name, "spec": m.model or str(it.get("spec") or ""),
+                    "quantity": qty, "purpose": str(it.get("purpose") or ""), "source": "lab",
+                    "available_quantity": m.available_quantity,
+                    "in_stock": m.available_quantity > 0,
+                }
+                lab_rows[m.id] = row
+                out_materials.append(row)
+            else:
+                out_materials.append({
+                    "material_id": None, "name": str(it["name"]), "spec": str(it.get("spec") or ""),
+                    "quantity": qty, "purpose": str(it.get("purpose") or ""), "source": "buy",
+                    "available_quantity": 0, "in_stock": False,
+                })
 
-    if not material_ids:
-        # 兜底：关键词匹配（物料名/分类/描述出现在项目描述中）
-        material_ids = [
-            m.id for m in materials
+    if not out_materials:
+        # 兜底：关键词匹配（物料名/分类/描述出现在项目描述中），只列在库件、无方案步骤
+        chosen = [
+            m for m in materials
             if any(kw and kw in description for kw in (m.name, m.category, *(m.description or "").split("，")))
         ][:6]
-        project_guess = project_guess or "（离线关键词匹配方案）"
+        return _resp(0, "ok", {
+            "feasible": True,
+            "project_guess": "（离线关键词匹配方案）",
+            "assumption": "", "plan": [],
+            "materials": [
+                {
+                    "material_id": m.id, "name": m.name, "spec": m.model or "",
+                    "quantity": 1, "purpose": "", "source": "lab",
+                    "available_quantity": m.available_quantity,
+                    "in_stock": m.available_quantity > 0,
+                }
+                for m in chosen
+            ],
+            "skills": [], "reference_projects": [],
+        })
 
-    chosen = [by_id[mid] for mid in material_ids]
     return _resp(0, "ok", {
+        "feasible": True,
         "project_guess": project_guess,
-        "materials": [
-            {
-                "material_id": m.id,
-                "name": m.name,
-                "available_quantity": m.available_quantity,
-                "in_stock": m.available_quantity > 0,
-            }
-            for m in chosen
-        ],
+        "assumption": assumption,
+        "plan": plan,
+        "materials": out_materials,
         "skills": [{"name": s, "link": ""} for s in skills],
         "reference_projects": [],  # 阶段 4 接入往期项目库
     })

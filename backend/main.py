@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status
-from services import ask_core, borrow_core, experience_core, recommend_bom_core, return_core
+from services import ask_core, borrow_core, experience_core, recommend_bom_core, return_core, review_borrow_core
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
@@ -26,6 +26,13 @@ class BorrowReq(BaseModel):
     user_id: str
     material_id: str
     safety_confirmed: bool = False  # 进阶级首次借用需勾选"我已知晓"（阶段 3 启用）
+    days: int = 30  # 借期（天），>30 需填 reason 并人工审核（API.md 第 3 节）
+    reason: str = ""  # 超期借用申请理由
+
+
+class ReviewReq(BaseModel):
+    record_id: str
+    approve: bool  # true 通过借出 / false 驳回
 
 
 class ReturnReq(BaseModel):
@@ -101,6 +108,8 @@ def record_dict(r: BorrowRecord, material_name: str) -> dict:
         "material_id": r.material_id,
         "material_name": material_name,
         "status": display_status(r),  # overdue 由读取时动态判断
+        "review_status": r.review_status,  # approved/pending/rejected
+        "review_reason": r.review_reason,
         "borrowed_at": iso(r.borrowed_at),
         "due_at": iso(r.due_at),
         "returned_at": iso(r.returned_at),
@@ -168,8 +177,15 @@ def get_card(card_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/borrow")
 def borrow(req: BorrowReq, db: Session = Depends(get_db)):
-    """借用。进阶级首次借用需安全确认（1002），专业级需教师审批（1003）。"""
-    return borrow_core(db, req.user_id, req.material_id, req.safety_confirmed)
+    """借用。进阶级首次借用需安全确认（1002），专业级需教师审批（1003）；
+    借期 >30 天需填理由（否则 1006）并转人工审核（pending，不扣库存）。"""
+    return borrow_core(db, req.user_id, req.material_id, req.safety_confirmed, req.days, req.reason)
+
+
+@app.post("/api/borrow/review")
+def review_borrow(req: ReviewReq, db: Session = Depends(get_db)):
+    """超期借用审核（管理端，演示用 /docs 调用）：通过则借出并扣库存，驳回转 rejected。"""
+    return review_borrow_core(db, req.record_id, req.approve)
 
 
 @app.post("/api/return")

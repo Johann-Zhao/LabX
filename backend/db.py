@@ -52,11 +52,14 @@ class BorrowRecord(Base):
     user_id = Column(String(32), nullable=False)
     material_id = Column(String(32), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
-    status = Column(String(20), nullable=False, default="active")  # pending/active/returned
+    status = Column(String(20), nullable=False, default="active")  # pending/active/returned/rejected
     borrowed_at = Column(DateTime, nullable=False, default=datetime.now)
     due_at = Column(DateTime, nullable=False)
     returned_at = Column(DateTime)
     experience_shared = Column(Boolean, default=False)  # 归还时是否已分享心得
+    # 超期借用分级审核（>30 天需人工审核）：approved 无需审核/已通过，pending 待审核，rejected 已驳回
+    review_status = Column(String(20), nullable=False, default="approved")
+    review_reason = Column(Text)  # 学生申请超期借用时填写的理由
 
 
 class KnowledgeCard(Base):

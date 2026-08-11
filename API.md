@@ -48,10 +48,12 @@ GET /api/materials/{material_id}
 
 ```
 POST /api/borrow
-入参: { "user_id": "2024001", "material_id": "A-017", "safety_confirmed": false }
+入参: { "user_id": "2024001", "material_id": "A-017", "safety_confirmed": false,
+        "days": 30, "reason": "" }
 返回: { "code": 0, "msg": "借用成功",
        "data": { "record_id": "R-1024", "material_id": "A-017", "status": "active",
-                 "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-08-25T20:30:00",
+                 "review_status": "approved",
+                 "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-09-10T20:30:00",
                  "knowledge_card": { "card_id": "KC-S003-ERR", "title": "DHT22 最易错点",
                                      "points": ["最易错点...", "关联物料...", "深入入口..."],
                                      "link": "/materials/S-003" } } }
@@ -61,7 +63,23 @@ POST /api/borrow
 - `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交（**已生效**）。
 - 进阶级未确认 → `code: 1002`，`data.safety_notice` 为安全要点文案；专业级 → `code: 1003`。
 - 重复借用（同一用户对该物料有未完结记录）→ `code: 1005`，`data.record_id` 为已有记录。
+- `days`：借用天数，可选，默认 30，允许范围 1~180（超出自动截断）。**≤ 30 天直接借出**（`status=active, review_status=approved`）；**> 30 天需人工审核**：
+  - 未填 `reason` → `code: 1006`（不产生记录）；
+  - 填了 `reason` → 创建 `status=pending, review_status=pending` 的申请记录，**不扣库存、不算借用中**，`knowledge_card` 为 `null`，`msg` 为"已提交审核"。审核见第 3.1 节。
 - 借用成功后 `knowledge_card` 为借用触发推送的单张知识卡片（三要点结构，取该物料的 common_errors 卡片）；该物料没有任何卡片时为 `null`。
+
+## 3.1 借用审核（管理端）
+
+```
+POST /api/borrow/review
+入参: { "record_id": "R-1024", "approve": true }
+返回: { "code": 0, "msg": "已通过，物料借出",
+       "data": { "record_id": "R-1024", "status": "active", "review_status": "approved",
+                 "borrowed_at": "...", "due_at": "...",
+                 "knowledge_card": { …同借用推送… } } }
+```
+
+说明：仅对 `status=pending` 的记录有效，其他状态 → `code: 1004`。通过：记录转 `active`、库存 -1，**借期自审核通过时刻起算**（天数 = 申请时的 days），并补推知识卡片；驳回：`status=rejected, review_status=rejected`，不扣库存。演示时不做管理端 UI，用 `/docs` 页面调用。
 
 ## 4. 归还
 
@@ -84,11 +102,13 @@ GET /api/records?user_id=
 返回: { "code": 0, "msg": "ok",
        "data": [ { "record_id": "R-1024", "user_id": "2024001", "material_id": "S-003",
                    "material_name": "DHT22 温湿度传感器", "status": "active",
-                   "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-08-25T20:30:00",
+                   "review_status": "approved", "review_reason": null,
+                   "borrowed_at": "2026-08-11T20:30:00", "due_at": "2026-09-10T20:30:00",
                    "returned_at": null } ] }
 ```
 
-`status` 取值：`pending`（待审批）/ `active`（借用中）/ `overdue`（逾期）/ `returned`（已归还）。
+`status` 取值：`pending`（超期借用审核中）/ `active`（借用中）/ `overdue`（逾期）/ `returned`（已归还）/ `rejected`（审核驳回）。
+`review_status` 取值：`approved`（无需审核或已通过）/ `pending`（等待人工审核）/ `rejected`（已驳回）；`review_reason` 为学生申请超期借用时填写的理由。
 
 ## 6. RAG 问答
 
@@ -108,15 +128,27 @@ POST /api/ask
 POST /api/recommend_bom
 入参: { "description": "我想做一个能自动浇花的装置", "user_id": "2024001" }
 返回: { "code": 0, "msg": "ok",
-       "data": { "project_guess": "土壤湿度监测 + 水泵控制的自动浇花装置",
+       "data": { "feasible": true,
+                 "project_guess": "土壤湿度监测 + 水泵控制的自动浇花装置",
+                 "assumption": "按单盆花、5V 供电的基础款估算",
+                 "plan": [ "1. 硬件：土壤湿度传感器接 A0，水泵经继电器接 D8",
+                           "2. 代码：定时采样，湿度低于阈值开泵 3 秒",
+                           "3. 调试：先串口看读数，再带载试水后整定阈值" ],
                  "materials": [ { "material_id": "A-017", "name": "Arduino Uno 开发板",
-                                  "available_quantity": 3, "in_stock": true } ],
+                                  "spec": "Uno R3", "quantity": 1, "purpose": "主控",
+                                  "source": "lab", "available_quantity": 5, "in_stock": true },
+                                { "material_id": null, "name": "硅胶水管",
+                                  "spec": "内径 6mm，1 米", "quantity": 1, "purpose": "水路",
+                                  "source": "buy", "available_quantity": 0, "in_stock": false } ],
                  "skills": [ { "name": "Arduino 基础编程", "link": "/materials/A-017" } ],
-                 "reference_projects": [ { "project_id": "P-2025-06",
-                                           "title": "张XX的自动浇花系统（2025年6月）" } ] } }
+                 "reference_projects": [] } }
 ```
 
-说明：推荐物料经过库存即时校验，`in_stock: false` 的物料前端置灰提示"缺货，可加入等待队列"。一键预约由前端对 `in_stock` 物料逐个调 `POST /api/borrow` 实现。
+说明：
+- LLM 按项目真实需要生成**全链路方案（plan，4-6 步）+ 完整物料清单（bom，不限于实验室目录）**，后端逐件与物料目录模糊匹配：命中 → `source=lab` 并带实时库存；未命中 → `source=buy`（`material_id` 为 `null`），表示需自行购买。`assumption` 为方案基于的默认配置假设。
+- 项目明显超出高校创新空间能力（高危/需资质/成本过高，如造真赛车、火箭）时返回 `feasible: false`，此时只有 `reply` 字段（幽默回应 + 可落地的替代建议），其余字段为空。
+- 一键预约由前端对 `source=lab 且 in_stock` 的物料逐个调 `POST /api/borrow` 实现（按 `quantity` 约对应件数，库存不足按现有库存约）。
+- LLM 不可用时退回关键词匹配（`plan` 为空数组、`source` 全部为 `lab`），接口永远可用。
 
 ## 8. 提交使用经验
 
@@ -158,7 +190,7 @@ POST /api/agent/chat
                  "bom": null } }
 ```
 
-说明：`intent` 取值 `troubleshoot`（排障）/ `recommend`（求推荐，此时 `bom` 字段为 BOM 结构化数据）/ `inventory`（查库存）/ `chitchat`（走通用 RAG 问答）。`steps` 是编排引擎的中间调用过程，前端用于展示"多能力协作"。
+说明：`intent` 取值 `troubleshoot`（排障）/ `recommend`（求推荐，此时 `bom` 字段为第 7 节的 BOM 结构化数据；`feasible=false` 时 `bom` 为 `null`，`answer` 为幽默回应+替代建议）/ `inventory`（查库存）/ `chitchat`（走通用 RAG 问答）。`steps` 是编排引擎的中间调用过程，前端用于展示"多能力协作"。
 
 ## 11. 知识卡片全文
 
@@ -187,6 +219,7 @@ GET /api/cards/{card_id}
 | 1002 | 进阶级物料首次借用，需安全确认（`data.safety_notice` 为要点文案） |
 | 1003 | 专业级物料需教师审批 |
 | 1004 | 记录不存在或当前状态不允许该操作 |
-| 1005 | 你已借出该物料（重复借用） |
+| 1005 | 你已借出该物料（重复借用；含审核中的申请） |
+| 1006 | 借用超过 30 天需填写申请理由（`days > 30` 且 `reason` 为空） |
 
-> 当前状态：全部接口为真实实现。1002 / 1003 权限拦截已生效（阶段 3）；智能体对话见第 10 节。
+> 当前状态：全部接口为真实实现。1002 / 1003 权限拦截已生效（阶段 3）；超期借用分级审核（1006 + 第 3.1 节）已生效；智能体对话见第 10 节。

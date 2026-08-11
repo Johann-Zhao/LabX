@@ -27,16 +27,18 @@ MOCK_ANSWER = (
 )
 
 
-def chat(system: str, user: str, max_tokens: int = 1024, fallback: str | None = MOCK_ANSWER) -> str | None:
+def chat(system: str, user: str, max_tokens: int = 1024, fallback: str | None = MOCK_ANSWER,
+         timeout: int = 30) -> str | None:
     """单轮问答，返回文本。任何异常都降级为 fallback，绝不向上抛。
 
     fallback 默认为通用兜底答案（问答场景直接用）；
     传 None 表示调用方要自己区分"LLM 不可用"（如 BOM 生成会退回关键词匹配）。
+    timeout：长输出场景（如 BOM 全量 JSON）要放宽，v4-flash 推理链耗时大。
     """
     if MOCK or not API_KEY:
         return fallback
     try:
-        client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=30)
+        client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=timeout)
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[

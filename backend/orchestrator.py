@@ -14,6 +14,7 @@ from services import (
     get_user_stats_core,
     parse_json_loose,
     recommend_bom_core,
+    score_material,
 )
 from websearch import web_search
 
@@ -60,27 +61,7 @@ def classify_intent(message: str) -> str:
 
 
 # ---------- 物料定位 ----------
-
-def _bigrams(text: str) -> set[str]:
-    return {text[i : i + 2] for i in range(len(text) - 1)}
-
-# 通用词二元组（"模块""传感器"这类词不构成定位依据，排除防误配）
-_GENERIC_BIGRAMS: set[str] = set()
-for _w in ["模块", "传感器", "开发板", "套装", "设备", "工具", "耗材"]:
-    _GENERIC_BIGRAMS |= _bigrams(_w)
-
-
-def _score_material(m: Material, message: str) -> int:
-    """消息与物料的相关度：全名 > 型号 > 特征二元组。"""
-    score = 0
-    if m.name in message:
-        score += 10
-    model_token = (m.model or "").split()[0] if m.model else ""
-    if model_token and model_token.lower() in message.lower():
-        score += 5
-    salient = (_bigrams(m.name) | _bigrams(m.model or "")) - _GENERIC_BIGRAMS
-    score += sum(1 for g in salient if g in message)
-    return score
+# 相关度评分 score_material 与二元组工具在 services.py（BOM 匹配与排障定位共用一份实现）
 
 
 def _find_target_material(db, active_borrows: list[dict], message: str):
@@ -94,14 +75,14 @@ def _find_target_material(db, active_borrows: list[dict], message: str):
         m = db.get(Material, b["material_id"])
         if m is None:
             continue
-        s = _score_material(m, message)
+        s = score_material(m, message)
         if s > best_score:
             best, best_score = m, s
     if best is not None:
         return best, best_score, True
     best, best_score = None, 0
     for m in db.query(Material).all():
-        s = _score_material(m, message)
+        s = score_material(m, message)
         if s > best_score:
             best, best_score = m, s
     return best, best_score, False
@@ -130,7 +111,7 @@ def _resolve_material_id(db, name: str, active_borrows: list[dict]) -> str | Non
     # 自由输入：按特征词模糊匹配，分数过低不算命中
     best, best_score = None, 0
     for m in db.query(Material).all():
-        s = _score_material(m, name)
+        s = score_material(m, name)
         if s > best_score:
             best, best_score = m, s
     return best.id if best and best_score >= 2 else None
@@ -320,9 +301,24 @@ def _chitchat(db, message: str, steps: list) -> dict:
 def _recommend(db, user_id: str, message: str, steps: list) -> dict:
     res = recommend_bom_core(db, message, user_id)
     bom = res["data"]
-    steps.append({"step": "生成物料方案", "detail": f"匹配到 {len(bom['materials'])} 件物料并完成库存校验"})
-    # 明细交给前端内联的 BOM 卡片展示，文字部分保持简洁
-    answer = f"为你生成了方案：{bom['project_guess']}。物料已校验库存，可直接一键预约："
+    # 接不住的愿望（火箭/真赛车等）：幽默回应 + 替代建议，不出 BOM 卡片
+    if not bom.get("feasible", True):
+        steps.append({"step": "生成物料方案", "detail": "项目超出创新空间能力，给出幽默回应与替代建议"})
+        return _resp(0, "ok", {
+            "intent": "recommend", "steps": steps, "answer": bom["reply"],
+            "references": [], "provenance": "model", "clarify": None, "bom": None,
+        })
+    lab_n = sum(1 for m in bom["materials"] if m["source"] == "lab")
+    buy_n = len(bom["materials"]) - lab_n
+    steps.append({"step": "生成物料方案",
+                  "detail": f"全链路方案 {len(bom['plan'])} 步；清单 {len(bom['materials'])} 件：在库 {lab_n}、需自购 {buy_n}"})
+    # 方案步骤放气泡正文（全链路是回答主体），物料明细交给前端 BOM 卡片
+    answer = f"为你生成了方案：{bom['project_guess']}"
+    if bom.get("assumption"):
+        answer += f"\n（默认配置：{bom['assumption']}，不符就告诉我调整）"
+    if bom.get("plan"):
+        answer += "\n实现路线：\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(bom["plan"]))
+    answer += f"\n物料清单见下方卡片：在库 {lab_n} 件可一键预约，需自购 {buy_n} 件已标出。"
     return _resp(0, "ok", {
         "intent": "recommend", "steps": steps, "answer": answer,
         "references": [], "provenance": "local_kb", "clarify": None, "bom": bom,
