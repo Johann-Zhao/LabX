@@ -1,0 +1,19 @@
+# 依赖与环境
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# 密钥（LLM API key 只放 backend/.env，绝不提交）
+.env
+
+# 构建产物
+dist/
+
+# 工具临时产物
+.playwright-mcp/
+
+# 本地数据文件（阶段 1+ 生成，不提交）
+*.db
+*.sqlite3
+.chroma/

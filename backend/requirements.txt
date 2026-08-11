@@ -1,0 +1,7 @@
+# 与《LabX实现技术方案与团队指南》附录 A 第 2 步一致
+fastapi
+uvicorn[standard]
+sqlalchemy
+chromadb
+openai
+python-dotenv
