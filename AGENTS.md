@@ -27,6 +27,7 @@ LabX：面向高校创新空间的体验型智能体——物料借还 + 借用�
 - 物料**不贴任何实体标签**（无 RFID/二维码），去向以借用记录为准。
 - MCP：阶段 2 用 FastMCP 把 material/knowledge 接口薄封装成 MCP Server；编排引擎就是 FastAPI 里的一个 Python 模块，不搞分布式。
 - 离线模式、本地 LLM、智能柜硬件：P3 展望，**只写文档不写代码**。
+- 智能体对话的交互规则（澄清优先、本地→联网→通用阶梯、provenance 标注）见 `docs/agent-workflow.md`，改对话行为先改它再改 `orchestrator.py`。
 
 ## 4. 开发命令
 
