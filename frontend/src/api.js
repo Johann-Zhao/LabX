@@ -40,9 +40,9 @@ export async function askQuestion(question, materialId = null) {
   return data
 }
 
-// 智能体对话（意图识别 + 多能力编排，返回 steps 调用过程）
-export async function agentChat(userId, message) {
-  const { data } = await http.post('/agent/chat', { user_id: userId, message })
+// 智能体对话（意图识别 + 澄清 + 多能力编排，返回 steps / provenance / clarify / bom）
+export async function agentChat(userId, message, convId) {
+  const { data } = await http.post('/agent/chat', { user_id: userId, message, conv_id: convId })
   return data
 }
 

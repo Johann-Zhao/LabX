@@ -35,8 +35,7 @@ onMounted(async () => {
 
   <nav class="tabs">
     <router-link to="/" class="tab" exact-active-class="active">物料</router-link>
-    <router-link to="/bom" class="tab" active-class="active">愿望到方案</router-link>
-    <router-link to="/ask" class="tab" active-class="active">问答</router-link>
+    <router-link to="/ask" class="tab" active-class="active">智能助手</router-link>
     <router-link to="/records" class="tab" active-class="active">我的借用</router-link>
   </nav>
 

@@ -225,15 +225,10 @@ def _recommend(db, user_id: str, message: str, steps: list) -> dict:
     res = recommend_bom_core(db, message, user_id)
     bom = res["data"]
     steps.append({"step": "生成物料方案", "detail": f"匹配到 {len(bom['materials'])} 件物料并完成库存校验"})
-    lines = [f"项目方案：{bom['project_guess']}", "", "【推荐物料】"]
-    lines += [
-        f"· {m['name']}（{'有货，可借 ' + str(m['available_quantity']) + ' 件' if m['in_stock'] else '暂时缺货'}）"
-        for m in bom["materials"]
-    ]
-    if bom["skills"]:
-        lines += ["", "【需要掌握的技能】"] + [f"· {s['name']}" for s in bom["skills"]]
+    # 明细交给前端内联的 BOM 卡片展示，文字部分保持简洁
+    answer = f"为你生成了方案：{bom['project_guess']}。物料已校验库存，可直接一键预约："
     return _resp(0, "ok", {
-        "intent": "recommend", "steps": steps, "answer": "\n".join(lines),
+        "intent": "recommend", "steps": steps, "answer": answer,
         "references": [], "provenance": "local_kb", "clarify": None, "bom": bom,
     })
 
