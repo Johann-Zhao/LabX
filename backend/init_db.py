@@ -135,6 +135,11 @@ def main() -> None:
         for c in load_cards():
             db.add(KnowledgeCard(**c))
         db.commit()
+
+        # 同步重建向量索引（RAG 检索用）
+        import rag
+        n = rag.rebuild_from_db(db.query(KnowledgeCard).all())
+        print(f"向量索引重建完成：{n} 张卡片")
     finally:
         db.close()
 

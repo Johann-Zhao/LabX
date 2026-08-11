@@ -247,18 +247,41 @@ def list_records(user_id: str = "", db: Session = Depends(get_db)):
     return ok("ok", [record_dict(r, names.get(r.material_id, r.material_id)) for r in records])
 
 
-# ---------- 以下仍是假数据（阶段 2 / 阶段 3 替换为真实实现） ----------
+# ---------- 知识问答（RAG） ----------
 
 @app.post("/api/ask")
-def ask(req: AskReq):
-    """RAG 问答（假数据）。阶段 2 接 Chroma + LLM，并保留断网兜底。"""
+def ask(req: AskReq, db: Session = Depends(get_db)):
+    """RAG 问答：物料内精确过滤 → 向量检索 top-3 → LLM 生成（带引用）。
+
+    LLM 不可达时 llm.chat 自动降级为兜底答案，接口永远返回 code 0（见 NFR2）。
+    """
+    import llm
+    import rag
+
+    hits = rag.query(req.question, material_id=req.material_id, top_k=3)
+    if not hits and req.material_id:
+        hits = rag.query(req.question, top_k=3)  # 物料内没命中 → 全库兜底
+    if not hits:
+        return ok("ok", {
+            "answer": "知识库里还没有相关内容，可以换个问法，或联系管理员补充该物料的知识卡片。",
+            "references": [],
+        })
+
+    context = "\n\n".join(f"【{h['title']}】\n{h['text']}" for h in hits)
+    system = (
+        "你是高校创新空间的助教 LabX。只根据给定的知识片段回答学生的问题，"
+        "语气直接、具体、给操作指令；知识片段没有的内容就老实说不知道，"
+        "并建议学生查看物料详情页或咨询管理员。回答控制在 150 字以内。"
+    )
+    user = f"知识片段：\n{context}\n\n学生问题：{req.question}"
+    answer = llm.chat(system, user)
     return ok("ok", {
-        "answer": "DHT22 读数一直是 0，最常见的原因是数据脚没接上拉电阻。请检查：1) DATA 脚接 4.7kΩ 上拉电阻到 VCC；2) 用官方示例代码自检；3) 确认供电为 3.3-5V。",
-        "references": [
-            {"card_id": "KC-S003-ERR", "title": "DHT22 最易错点"},
-            {"card_id": "KC-S003-QS", "title": "DHT22 3 分钟上手"},
-        ],
+        "answer": answer,
+        "references": [{"card_id": h["card_id"], "title": h["title"]} for h in hits],
     })
+
+
+# ---------- 以下仍是假数据（阶段 3 替换为真实实现） ----------
 
 
 @app.post("/api/recommend_bom")
