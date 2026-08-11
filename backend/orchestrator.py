@@ -4,6 +4,8 @@
 - 槽位缺失先反问，不硬答
 - 本地知识库 → 联网检索 → 通用经验 → 离线兜底，每答必标 provenance
 """
+import re
+
 import llm
 import rag
 from db import Material
@@ -33,6 +35,7 @@ _INTENT_KEYWORDS = {
 _CONV: dict[str, dict] = {}
 
 _SELF_OWNED_OPTION = "都不是，是我自己的物料"
+_ESCAPE_OPTION = "不用问了，直接回答"  # 逃生项：用户有权跳过澄清
 
 
 def classify_intent(message: str) -> str:
@@ -115,6 +118,23 @@ def _has_concrete_phenomenon(message: str) -> bool:
     return any(w in message for w in _CONCRETE_PHENOMENA)
 
 
+def _resolve_material_id(db, name: str, active_borrows: list[dict]) -> str | None:
+    """把澄清回答（选项文本或自由输入）解析为系统内物料 ID；解析不出返回 None。"""
+    for b in active_borrows:
+        if b["material_name"] == name:
+            return b["material_id"]
+    m = db.query(Material).filter(Material.name == name).first()
+    if m:
+        return m.id
+    # 自由输入：按特征词模糊匹配，分数过低不算命中
+    best, best_score = None, 0
+    for m in db.query(Material).all():
+        s = _score_material(m, name)
+        if s > best_score:
+            best, best_score = m, s
+    return best.id if best and best_score >= 2 else None
+
+
 # ---------- 回答阶梯：本地 → 联网 → 通用 → 离线 ----------
 
 def _gen(system: str, user: str, max_tokens: int = 800) -> str | None:
@@ -148,7 +168,16 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
         refs = [{"card_id": h["card_id"], "title": h["title"], "url": None} for h in hits]
         return (raw or llm.MOCK_ANSWER, refs, "local_kb" if raw else "offline")
 
-    # 2. 联网检索
+    # 2. 联网检索（优先 DeepSeek 原生 web_search，失败退回 DuckDuckGo）
+    raw = llm.chat_with_search(
+        "你是高校创新空间的助教。基于联网搜索到的资料回答学生问题，给出可操作的步骤，200 字以内。",
+        f"学生问题：{question}",
+    )
+    if raw:
+        steps.append({"step": "本地未收录，已联网检索", "detail": "DeepSeek 原生联网搜索"})
+        urls = re.findall(r"https?://[^\s\)\]>\"，。]+", raw)
+        refs = [{"card_id": None, "title": u.split("/")[2] if "/" in u else u, "url": u} for u in urls[:3]]
+        return raw, refs, "web"
     results = web_search(query_text)
     if results:
         steps.append({"step": "本地未收录，已联网检索", "detail": f"找到 {len(results)} 条网络资料"})
@@ -176,10 +205,10 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
 
 # ---------- 各意图分支 ----------
 
-def _clarify(state: dict, intent: str, message: str, steps: list, options: list[str],
-             question: str, target_id: str | None = None) -> dict:
-    """进入澄清：挂起原始问题（含已定位物料），等用户下一条补充。"""
-    state["pending"] = {"intent": intent, "message": message, "target_id": target_id}
+def _clarify(state: dict, intent: str, message: str, slots: dict, awaiting: str,
+             steps: list, options: list[str], question: str) -> dict:
+    """挂起当前槽位进度，就下一个缺失槽位发问（每轮只问一个）。"""
+    state["pending"] = {"intent": intent, "message": message, "slots": slots, "awaiting": awaiting}
     steps.append({"step": "信息不足，发起澄清", "detail": question})
     return _resp(0, "ok", {
         "intent": intent,
@@ -192,46 +221,47 @@ def _clarify(state: dict, intent: str, message: str, steps: list, options: list[
 
 
 def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
-                  allow_clarify: bool, forced_target_id: str | None = None,
-                  no_catalog_guess: bool = False) -> dict:
-    """排障分支：确认上下文 → 槽位检查（物料+现象，不足则澄清）→ 阶梯回答。"""
+                  allow_clarify: bool, slots: dict | None = None) -> dict:
+    """排障分支：槽位（物料/现象）逐轮澄清，问清为止 → 阶梯回答。"""
     stats = get_user_stats_core(db, user_id)
     active = stats["active_borrows"] if stats else []
     names = "、".join(b["material_name"] for b in active) or "无（当前没有借用中的物料）"
     steps.append({"step": "确认借用上下文", "detail": f"你当前借用：{names}"})
 
-    if forced_target_id:
-        # 澄清后带回来的物料：直接采信，跳过定位
-        target, score, from_borrows = db.get(Material, forced_target_id), 99, True
-    elif no_catalog_guess:
-        # 用户已明确"不是系统内的物料"：禁止目录猜测，按外部物料处理
-        target, score, from_borrows = None, 0, False
-    else:
+    if slots is None:
+        # 首次进入：从消息里自动识别两个槽位
+        slots = {"material_id": None, "custom_material": None, "phenomenon": None, "guess_id": None}
         target, score, from_borrows = _find_target_material(db, active, message)
+        if target is not None and (from_borrows or score >= 2):
+            slots["material_id"] = target.id
+        elif target is not None:
+            slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
+        if _has_concrete_phenomenon(message):
+            slots["phenomenon"] = message
 
     if allow_clarify:
-        # 物料槽位：借用清单内命中算定位；全目录弱匹配（<2 分）只是猜测，要确认
-        material_ok = target is not None and (from_borrows or score >= 2)
-        phenomenon_ok = _has_concrete_phenomenon(message)
-        if not material_ok or not phenomenon_ok:
-            options: list[str] = []
-            parts: list[str] = []
-            if not material_ok:
-                candidates = [b["material_name"] for b in active]
-                if target is not None and target.name not in candidates:
-                    candidates.insert(0, f"{target.name}（猜的）")
-                options += candidates[:4] + [_SELF_OWNED_OPTION]
-                parts.append("是哪个物料")
-            if not phenomenon_ok:
-                if material_ok:
-                    # 物料已定只缺现象：候选项给常见现象
-                    options = _PHENOMENON_OPTIONS
-                    parts.append("具体什么现象")
-                else:
-                    parts.append("什么现象（完全不转/时好时坏/异响/发烫）")
-            question = "为了准确排查，先确认一下：" + "，".join(parts) + "？"
-            return _clarify(state, "troubleshoot", message, steps, options, question,
-                            target_id=target.id if (target and (from_borrows or score >= 2)) else None)
+        if not slots.get("material_id") and not slots.get("custom_material"):
+            options = [b["material_name"] for b in active]
+            guess_id = slots.get("guess_id")
+            if guess_id:
+                g = db.get(Material, guess_id)
+                if g and g.name not in options:
+                    options.insert(0, f"{g.name}（猜的）")
+            options += [_SELF_OWNED_OPTION, _ESCAPE_OPTION]
+            return _clarify(state, "troubleshoot", message, slots, "material", steps, options,
+                            "为了准确排查，先确认一下：是哪个物料？")
+        if not slots.get("phenomenon"):
+            return _clarify(state, "troubleshoot", message, slots, "phenomenon", steps,
+                            _PHENOMENON_OPTIONS + [_ESCAPE_OPTION],
+                            "明白。具体是什么现象？")
+
+    # ---- 槽位齐备（或用户选择直接回答）：组织最终问题并作答 ----
+    target = db.get(Material, slots["material_id"]) if slots.get("material_id") else None
+    question = message
+    if slots.get("custom_material"):
+        question += f"。用户自带物料：{slots['custom_material']}"
+    if slots.get("phenomenon") and slots["phenomenon"] != message:
+        question += f"。具体现象：{slots['phenomenon']}"
 
     if target:
         steps.append({"step": "定位故障物料", "detail": f"{target.name}（{target.id}）"})
@@ -241,11 +271,14 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
             else f"备件：{target.name} 暂时无库存，可到 {target.location} 登记等待"
         )
         steps.append({"step": "确认备件库存", "detail": spare_text})
+    elif slots.get("custom_material"):
+        steps.append({"step": "定位故障物料", "detail": f"用户自带物料「{slots['custom_material']}」（不在目录），按外部物料处理"})
+        spare_text = ""
     else:
-        steps.append({"step": "定位故障物料", "detail": "未定位到在库物料，按通用排障处理"})
+        steps.append({"step": "定位故障物料", "detail": "未定位到物料，按通用排障处理"})
         spare_text = ""
 
-    answer, refs, provenance = _ladder_answer(message, target, spare_text, names, steps)
+    answer, refs, provenance = _ladder_answer(question, target, spare_text, names, steps)
     return _resp(0, "ok", {
         "intent": "troubleshoot", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
@@ -295,12 +328,11 @@ def _inventory(db, message: str, steps: list) -> dict:
 # ---------- 编排入口 ----------
 
 def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool,
-              forced_intent: str | None, forced_target_id: str | None = None,
-              no_catalog_guess: bool = False) -> dict:
+              forced_intent: str | None, slots: dict | None = None) -> dict:
     intent = forced_intent or classify_intent(message)
     steps.insert(0, {"step": "意图识别", "detail": f"识别为「{INTENT_LABELS[intent]}」"})
     if intent == "troubleshoot":
-        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, forced_target_id, no_catalog_guess)
+        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, slots)
     if intent == "recommend":
         return _recommend(db, user_id, message, steps)
     if intent == "inventory":
@@ -309,37 +341,46 @@ def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_cl
 
 
 def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict:
-    """编排入口。conv_id 标识对话（前端生成），用于澄清状态的挂起与恢复。"""
+    """编排入口。conv_id 标识对话（前端生成），用于澄清槽位的挂起与恢复。
+
+    澄清是逐槽位多轮的：每轮只问一个缺失槽位，直到物料+现象都清楚
+    （或用户点"不用问了，直接回答"）。规则见 docs/agent-workflow.md。
+    """
     state = _CONV.setdefault(conv_id, {})
     pending = state.pop("pending", None)
     if pending:
-        # 本条消息是对澄清问题的回答
-        if pending.get("awaiting_custom_material"):
-            # 用户补充了自带物料的名称/型号：不再做任何目录猜测，直接按外部物料回答
-            merged = f"{pending['message']}。用户自带物料：{message}"
-            steps = [{"step": "澄清补充", "detail": f"原问题「{pending['message']}」+ 自带物料「{message}」"}]
-            return _dispatch(db, user_id, merged, steps, state, allow_clarify=False,
-                             forced_intent=pending["intent"], no_catalog_guess=True)
-        if message == _SELF_OWNED_OPTION:
-            # "都不是"只排除了系统内物料，还没问出是什么——再追问名称/型号（最后一轮澄清）
-            state["pending"] = {**pending, "awaiting_custom_material": True}
-            question = "好的，是你自己的物料。它叫什么名字、什么型号？（如 SG90 舵机、42 步进电机、直流减速电机）"
-            steps = [{"step": "信息不足，发起澄清", "detail": "物料不在系统中，追问名称/型号"}]
-            return _resp(0, "ok", {
-                "intent": pending["intent"], "steps": steps, "answer": question,
-                "references": [], "provenance": None,
-                "clarify": {"question": question, "options": []},
-            })
-        # 点了候选物料或回答了现象：与原始问题合并后重走流程，不再二次澄清
-        forced_target = None
-        if pending.get("target_id"):
-            merged = f"{pending['message']}。具体现象：{message}"
-            forced_target = pending["target_id"]
-        elif pending["intent"] == "troubleshoot":
-            merged = f"{pending['message']}。故障物料是：{message.replace('（猜的）', '')}"
-        else:
-            merged = f"{pending['message']} {message}"
-        steps = [{"step": "澄清补充", "detail": f"原问题「{pending['message']}」+ 补充「{message}」"}]
-        return _dispatch(db, user_id, merged, steps, state, allow_clarify=False,
-                         forced_intent=pending["intent"], forced_target_id=forced_target)
+        slots = pending.get("slots") or {}
+        original = pending["message"]
+        awaiting = pending.get("awaiting")
+
+        # 逃生项：用户选择跳过澄清，按已有信息直接回答
+        if message == _ESCAPE_OPTION:
+            steps = [{"step": "用户选择直接回答", "detail": "按当前已知信息处理"}]
+            return _dispatch(db, user_id, original, steps, state,
+                             allow_clarify=False, forced_intent=pending["intent"], slots=slots)
+
+        steps = [{"step": "澄清补充", "detail": f"原问题「{original}」+ 补充「{message}」"}]
+        if awaiting == "material":
+            if message == _SELF_OWNED_OPTION:
+                # "都不是"只是排除了系统内物料，必须再追问名称/型号
+                return _clarify(state, pending["intent"], original, slots, "custom_material",
+                                steps, [_ESCAPE_OPTION],
+                                "好的，是你自己的物料。它叫什么名字、什么型号？（如 SG90 舵机、42 步进电机、直流减速电机）")
+            name = message.replace("（猜的）", "")
+            active = (get_user_stats_core(db, user_id) or {}).get("active_borrows", [])
+            mid = _resolve_material_id(db, name, active)
+            if mid:
+                slots["material_id"] = mid
+            else:
+                # 自由输入且目录里也没有 → 视为自带物料
+                slots["custom_material"] = name
+                slots.pop("guess_id", None)
+        elif awaiting == "custom_material":
+            slots["custom_material"] = message
+            slots.pop("guess_id", None)
+        elif awaiting == "phenomenon":
+            slots["phenomenon"] = message
+        # 槽位推进后重入流程：还有缺失槽位会继续问，齐了自然回答
+        return _dispatch(db, user_id, original, steps, state,
+                         allow_clarify=True, forced_intent=pending["intent"], slots=slots)
     return _dispatch(db, user_id, message, [], state, allow_clarify=True, forced_intent=None)

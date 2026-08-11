@@ -8,6 +8,7 @@
 """
 import os
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -47,3 +48,37 @@ def chat(system: str, user: str, max_tokens: int = 1024, fallback: str | None = 
         return (resp.choices[0].message.content or "").strip() or fallback
     except Exception:  # 网络不通、key 失效、超时等一律兜底
         return fallback
+
+
+def chat_with_search(system: str, user: str, max_tokens: int = 1024) -> str | None:
+    """DeepSeek Responses API 原生联网搜索（tools=web_search，无需第三方搜索 key）。
+
+    成功返回回答文本；任何失败返回 None，由调用方降级（DuckDuckGo/通用经验）。
+    """
+    if MOCK or not API_KEY:
+        return None
+    base = BASE_URL.removesuffix("/v1")  # https://api.deepseek.com
+    try:
+        resp = httpx.post(
+            f"{base}/responses",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            json={
+                "model": MODEL,
+                "instructions": system,
+                "input": user,
+                "tools": [{"type": "web_search"}],
+                "max_output_tokens": max_tokens,
+            },
+            timeout=45,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        for item in reversed(data.get("output", [])):
+            if item.get("type") == "message":
+                for c in item.get("content", []):
+                    if c.get("type") == "output_text" and c.get("text"):
+                        return c["text"].strip()
+        return None
+    except Exception:
+        return None
