@@ -6,3 +6,4 @@ chromadb
 openai
 python-dotenv
 pyyaml
+fastmcp

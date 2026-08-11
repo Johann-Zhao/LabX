@@ -1,26 +1,23 @@
-"""LabX 后端。
+"""LabX 后端（REST 接口层，全部为薄封装）。
 
-阶段 1：materials / borrow / return / records 已接真实数据库（SQLite via SQLAlchemy）。
-阶段 2 进行中：借用成功返回该物料的真实知识卡片（knowledge_cards 表）；
-ask / recommend_bom / experience 仍是假数据（ask 接 RAG、其余由阶段 3 接 LLM 与编排引擎）。
+借还状态机与 RAG 问答的核心逻辑在 services.py（REST 与 MCP 共用一份实现）；
+检索见 rag.py，LLM 封装见 llm.py。
+当前 ask / borrow / return / records / materials 为真实实现；
+recommend_bom / experience 仍是假数据（阶段 3 接 LLM 与编排引擎）。
 接口契约见仓库根目录 API.md，改动契约先在群里同步。
 """
-from datetime import datetime, timedelta
-import json
-
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status
+from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, display_status
+from services import ask_core, borrow_core, return_core
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
-
-BORROW_DAYS = 14  # 借用时长：两周（应还时间 = 借用时间 + 14 天）
 
 
 # ---------- 请求体模型 ----------
@@ -73,7 +70,7 @@ def err(code: int, msg: str, data=None) -> dict:
     return {"code": code, "msg": msg, "data": data}
 
 
-def iso(dt: datetime | None) -> str | None:
+def iso(dt) -> str | None:
     return dt.isoformat() if dt else None
 
 
@@ -102,11 +99,6 @@ def record_dict(r: BorrowRecord, material_name: str) -> dict:
         "due_at": iso(r.due_at),
         "returned_at": iso(r.returned_at),
     }
-
-
-def next_record_id(db: Session) -> str:
-    """记录编号 R-1001 起递增（演示规模无并发，计数即可）。"""
-    return f"R-{1001 + db.query(BorrowRecord).count()}"
 
 
 # ---------- 联调检查 ----------
@@ -146,94 +138,18 @@ def get_material(material_id: str, db: Session = Depends(get_db)):
     })
 
 
-# ---------- 借还（状态机核心，见方案文档 4.2 节） ----------
+# ---------- 借还（核心逻辑在 services.py，REST/MCP 共用） ----------
 
 @app.post("/api/borrow")
 def borrow(req: BorrowReq, db: Session = Depends(get_db)):
-    """借用：库存充足且无重复借用 → active，库存 -1。错误码见 API.md。
-
-    阶段 1 不启用分级权限拦截（1002/1003 由阶段 3 实现）。
-    """
-    m = db.get(Material, req.material_id)
-    if m is None:
-        return err(404, f"物料 {req.material_id} 不存在")
-    if db.get(User, req.user_id) is None:
-        return err(404, f"用户 {req.user_id} 不存在")
-    # 重复借用：同一用户对该物料有未完结记录（借用中/待审批）→ 提示先归还
-    existing = db.query(BorrowRecord).filter(
-        BorrowRecord.user_id == req.user_id,
-        BorrowRecord.material_id == req.material_id,
-        BorrowRecord.status.in_(["active", "pending"]),
-    ).first()
-    if existing is not None:
-        return err(1005, "你已借出该物料，请先归还", {"record_id": existing.id})
-    if m.available_quantity < 1:
-        return err(1001, "库存不足，可加入预约等待队列")
-
-    now = datetime.now()
-    record = BorrowRecord(
-        id=next_record_id(db),
-        user_id=req.user_id,
-        material_id=m.id,
-        quantity=1,
-        status="active",
-        borrowed_at=now,
-        due_at=now + timedelta(days=BORROW_DAYS),
-    )
-    m.available_quantity -= 1
-    db.add(record)
-    db.commit()
-    return ok("借用成功", {
-        "record_id": record.id,
-        "material_id": m.id,
-        "status": "active",
-        "borrowed_at": iso(record.borrowed_at),
-        "due_at": iso(record.due_at),
-        "knowledge_card": push_card_dict(db, m.id),
-    })
-
-
-def push_card_dict(db: Session, material_id: str) -> dict | None:
-    """借用触发的知识推送：取该物料的"常见错误"卡片（没有则取任意一张）。"""
-    card = db.query(KnowledgeCard).filter(
-        KnowledgeCard.material_id == material_id,
-        KnowledgeCard.card_type == "common_errors",
-    ).first() or db.query(KnowledgeCard).filter(
-        KnowledgeCard.material_id == material_id
-    ).first()
-    if card is None:
-        return None
-    return {
-        "card_id": card.id,
-        "title": card.title,
-        "points": json.loads(card.points),
-        "link": f"/materials/{material_id}",
-    }
+    """借用。阶段 1 不启用分级权限拦截（1002/1003 由阶段 3 实现）。"""
+    return borrow_core(db, req.user_id, req.material_id)
 
 
 @app.post("/api/return")
 def return_material(req: ReturnReq, db: Session = Depends(get_db)):
-    """归还：active/overdue → returned，库存 +1。experience_draft 由阶段 3 接入 LLM。"""
-    r = db.get(BorrowRecord, req.record_id)
-    if r is None:
-        return err(404, f"借用记录 {req.record_id} 不存在")
-    if r.status == "returned":
-        return err(1004, "该记录已归还，请勿重复操作")
-    if r.status == "pending":
-        return err(1004, "该记录仍在待审批状态，无需归还")
-
-    r.status = "returned"
-    r.returned_at = datetime.now()
-    m = db.get(Material, r.material_id)
-    if m is not None:
-        m.available_quantity += 1
-    db.commit()
-    return ok("归还成功", {
-        "record_id": r.id,
-        "status": "returned",
-        "returned_at": iso(r.returned_at),
-        "experience_draft": None,  # 阶段 3：LLM 预填心得草稿
-    })
+    """归还。"""
+    return return_core(db, req.record_id)
 
 
 @app.get("/api/records")
@@ -247,42 +163,14 @@ def list_records(user_id: str = "", db: Session = Depends(get_db)):
     return ok("ok", [record_dict(r, names.get(r.material_id, r.material_id)) for r in records])
 
 
-# ---------- 知识问答（RAG） ----------
+# ---------- 知识问答（RAG，核心逻辑在 services.py） ----------
 
 @app.post("/api/ask")
 def ask(req: AskReq, db: Session = Depends(get_db)):
-    """RAG 问答：物料内精确过滤 → 向量检索 top-3 → LLM 生成（带引用）。
-
-    LLM 不可达时 llm.chat 自动降级为兜底答案，接口永远返回 code 0（见 NFR2）。
-    """
-    import llm
-    import rag
-
-    hits = rag.query(req.question, material_id=req.material_id, top_k=3)
-    if not hits and req.material_id:
-        hits = rag.query(req.question, top_k=3)  # 物料内没命中 → 全库兜底
-    if not hits:
-        return ok("ok", {
-            "answer": "知识库里还没有相关内容，可以换个问法，或联系管理员补充该物料的知识卡片。",
-            "references": [],
-        })
-
-    context = "\n\n".join(f"【{h['title']}】\n{h['text']}" for h in hits)
-    system = (
-        "你是高校创新空间的助教 LabX。只根据给定的知识片段回答学生的问题，"
-        "语气直接、具体、给操作指令；知识片段没有的内容就老实说不知道，"
-        "并建议学生查看物料详情页或咨询管理员。回答控制在 150 字以内。"
-    )
-    user = f"知识片段：\n{context}\n\n学生问题：{req.question}"
-    answer = llm.chat(system, user)
-    return ok("ok", {
-        "answer": answer,
-        "references": [{"card_id": h["card_id"], "title": h["title"]} for h in hits],
-    })
+    return ask_core(req.question, req.material_id)
 
 
 # ---------- 以下仍是假数据（阶段 3 替换为真实实现） ----------
-
 
 @app.post("/api/recommend_bom")
 def recommend_bom(req: RecommendBomReq):
@@ -291,13 +179,13 @@ def recommend_bom(req: RecommendBomReq):
         "project_guess": "土壤湿度监测 + 水泵控制的自动浇花装置",
         "materials": [
             {"material_id": "A-017", "name": "Arduino Uno 开发板", "available_quantity": 3, "in_stock": True},
-            {"material_id": "S-003", "name": "DHT22 温湿度传感器", "available_quantity": 8, "in_stock": True},
-            {"material_id": "M-011", "name": "L298N 电机驱动模块", "available_quantity": 2, "in_stock": True},
-            {"material_id": "P-002", "name": "5V 微型水泵", "available_quantity": 0, "in_stock": False},
+            {"material_id": "S-007", "name": "土壤湿度传感器", "available_quantity": 6, "in_stock": True},
+            {"material_id": "E-001", "name": "5V 微型水泵", "available_quantity": 3, "in_stock": True},
+            {"material_id": "M-013", "name": "单路继电器模块", "available_quantity": 6, "in_stock": True},
         ],
         "skills": [
             {"name": "Arduino 基础编程", "link": "/materials/A-017"},
-            {"name": "继电器控制原理", "link": "/materials/M-011"},
+            {"name": "继电器控制原理", "link": "/materials/M-013"},
         ],
         "reference_projects": [
             {"project_id": "P-2025-06", "title": "张XX的自动浇花系统（2025年6月）"},
