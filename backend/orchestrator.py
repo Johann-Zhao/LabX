@@ -80,22 +80,39 @@ def _score_material(m: Material, message: str) -> int:
 
 
 def _find_target_material(db, active_borrows: list[dict], message: str):
-    """定位故障物料：先用户当前借用（只借一件时直接取），再全量物料目录。"""
-    if len(active_borrows) == 1:
-        m = db.get(Material, active_borrows[0]["material_id"])
-        if m and (_score_material(m, message) > 0 or len(active_borrows) == 1):
-            return m
+    """定位故障物料，返回 (material|None, score, from_borrows)。
+
+    借用清单内的匹配优先（他借了什么大概率就是问什么，特征词命中即算定位）；
+    清单无匹配才扫全量目录——目录匹配只是猜测（弱匹配必须澄清确认）。
+    """
     best, best_score = None, 0
-    candidates = [db.get(Material, b["material_id"]) for b in active_borrows] or []
-    if not any(candidates):  # 借用清单没匹配上时，在全目录里找（说的可能是在库但没借的）
-        candidates = db.query(Material).all()
-    for m in candidates:
+    for b in active_borrows:
+        m = db.get(Material, b["material_id"])
         if m is None:
             continue
         s = _score_material(m, message)
         if s > best_score:
             best, best_score = m, s
-    return best
+    if best is not None:
+        return best, best_score, True
+    best, best_score = None, 0
+    for m in db.query(Material).all():
+        s = _score_material(m, message)
+        if s > best_score:
+            best, best_score = m, s
+    return best, best_score, False
+
+
+# 现象具体性：命中具体现象词才算说清楚；"坏了/不行了"这类算模糊
+_CONCRETE_PHENOMENA = [
+    "不转", "不亮", "没反应", "没输出", "读数", "报错", "发烫", "发热", "异响", "抖",
+    "冒烟", "短路", "烧", "不稳", "乱码", "连不上", "下载失败", "上传失败", "超时", "漂移", "不动",
+]
+_PHENOMENON_OPTIONS = ["完全不转/完全没反应", "时好时坏/抖动", "有异响", "发烫或冒烟", "读数/输出异常", "其他"]
+
+
+def _has_concrete_phenomenon(message: str) -> bool:
+    return any(w in message for w in _CONCRETE_PHENOMENA)
 
 
 # ---------- 回答阶梯：本地 → 联网 → 通用 → 离线 ----------
@@ -159,10 +176,11 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
 
 # ---------- 各意图分支 ----------
 
-def _clarify(state: dict, intent: str, message: str, steps: list, options: list[str], question: str) -> dict:
-    """进入澄清：挂起原始问题，等用户下一条补充。"""
-    state["pending"] = {"intent": intent, "message": message}
-    steps.append({"step": "信息不足，发起澄清", "detail": "需要用户补充关键信息"})
+def _clarify(state: dict, intent: str, message: str, steps: list, options: list[str],
+             question: str, target_id: str | None = None) -> dict:
+    """进入澄清：挂起原始问题（含已定位物料），等用户下一条补充。"""
+    state["pending"] = {"intent": intent, "message": message, "target_id": target_id}
+    steps.append({"step": "信息不足，发起澄清", "detail": question})
     return _resp(0, "ok", {
         "intent": intent,
         "steps": steps,
@@ -173,25 +191,43 @@ def _clarify(state: dict, intent: str, message: str, steps: list, options: list[
     })
 
 
-def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool) -> dict:
-    """排障分支：确认上下文 → 定位物料（不足则澄清）→ 阶梯回答。"""
+def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
+                  allow_clarify: bool, forced_target_id: str | None = None) -> dict:
+    """排障分支：确认上下文 → 槽位检查（物料+现象，不足则澄清）→ 阶梯回答。"""
     stats = get_user_stats_core(db, user_id)
     active = stats["active_borrows"] if stats else []
     names = "、".join(b["material_name"] for b in active) or "无（当前没有借用中的物料）"
     steps.append({"step": "确认借用上下文", "detail": f"你当前借用：{names}"})
 
-    target = _find_target_material(db, active, message)
-    if target is None and allow_clarify:
-        if active:
-            return _clarify(
-                state, "troubleshoot", message, steps,
-                [b["material_name"] for b in active] + [_SELF_OWNED_OPTION],
-                "为了准确排查，先确认一下：这个问题是关于哪件物料的？",
-            )
-        return _clarify(
-            state, "troubleshoot", message, steps, [],
-            "你手里用的是什么物料/模块？（告诉我名称或型号，如 DHT22、L298N、SG90 舵机）",
-        )
+    if forced_target_id:
+        # 澄清后带回来的物料：直接采信，跳过定位
+        target, score, from_borrows = db.get(Material, forced_target_id), 99, True
+    else:
+        target, score, from_borrows = _find_target_material(db, active, message)
+
+    if allow_clarify:
+        # 物料槽位：借用清单内命中算定位；全目录弱匹配（<2 分）只是猜测，要确认
+        material_ok = target is not None and (from_borrows or score >= 2)
+        phenomenon_ok = _has_concrete_phenomenon(message)
+        if not material_ok or not phenomenon_ok:
+            options: list[str] = []
+            parts: list[str] = []
+            if not material_ok:
+                candidates = [b["material_name"] for b in active]
+                if target is not None and target.name not in candidates:
+                    candidates.insert(0, f"{target.name}（猜的）")
+                options += candidates[:4] + [_SELF_OWNED_OPTION]
+                parts.append("是哪个物料")
+            if not phenomenon_ok:
+                if material_ok:
+                    # 物料已定只缺现象：候选项给常见现象
+                    options = _PHENOMENON_OPTIONS
+                    parts.append("具体什么现象")
+                else:
+                    parts.append("什么现象（完全不转/时好时坏/异响/发烫）")
+            question = "为了准确排查，先确认一下：" + "，".join(parts) + "？"
+            return _clarify(state, "troubleshoot", message, steps, options, question,
+                            target_id=target.id if (target and (from_borrows or score >= 2)) else None)
 
     if target:
         steps.append({"step": "定位故障物料", "detail": f"{target.name}（{target.id}）"})
@@ -254,11 +290,12 @@ def _inventory(db, message: str, steps: list) -> dict:
 
 # ---------- 编排入口 ----------
 
-def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool, forced_intent: str | None) -> dict:
+def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool,
+              forced_intent: str | None, forced_target_id: str | None = None) -> dict:
     intent = forced_intent or classify_intent(message)
     steps.insert(0, {"step": "意图识别", "detail": f"识别为「{INTENT_LABELS[intent]}」"})
     if intent == "troubleshoot":
-        return _troubleshoot(db, user_id, message, steps, state, allow_clarify)
+        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, forced_target_id)
     if intent == "recommend":
         return _recommend(db, user_id, message, steps)
     if intent == "inventory":
@@ -272,12 +309,18 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict
     pending = state.pop("pending", None)
     if pending:
         # 本条消息是对澄清问题的回答：与原始问题合并后重走流程，且不再允许二次澄清
+        forced_target = None
         if message == _SELF_OWNED_OPTION:
-            merged = pending["message"]
+            merged = pending["message"]  # 系统外物料：不附加物料信息
+        elif pending.get("target_id"):
+            # 物料已定位、只补充现象的情况
+            merged = f"{pending['message']}。具体现象：{message}"
+            forced_target = pending["target_id"]
         elif pending["intent"] == "troubleshoot":
-            merged = f"{pending['message']}。故障物料是：{message}"
+            merged = f"{pending['message']}。故障物料是：{message.replace('（猜的）', '')}"
         else:
             merged = f"{pending['message']} {message}"
         steps = [{"step": "澄清补充", "detail": f"原问题「{pending['message']}」+ 补充「{message}」"}]
-        return _dispatch(db, user_id, merged, steps, state, allow_clarify=False, forced_intent=pending["intent"])
+        return _dispatch(db, user_id, merged, steps, state, allow_clarify=False,
+                         forced_intent=pending["intent"], forced_target_id=forced_target)
     return _dispatch(db, user_id, message, [], state, allow_clarify=True, forced_intent=None)
