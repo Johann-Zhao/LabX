@@ -1,6 +1,10 @@
 material_id,name,model,category,access_level,total_quantity,available_quantity,location,description
 A-017,Arduino Uno 开发板,Uno R3,开发板,advanced,5,5,201室 A柜,入门首选单片机开发板，适合绝大多数创意原型项目。
+A-018,STM32F103C8T6 最小系统板,STM32F103C8T6,开发板,advanced,8,8,201室 A柜,电赛主力芯片，性能强，需配合 ST-Link 烧录器使用。
+A-019,51 单片机学习板,STC89C52RC,开发板,advanced,10,10,201室 A柜,微机原理课程经典教学板，板载外设齐全适合打基础。
 A-023,ESP32-S3 开发板,ESP32-S3-DevKitC-1,开发板,advanced,4,4,201室 A柜,带 WiFi 和蓝牙的物联网开发板，适合做联网项目。
+A-024,Raspberry Pi 4B 开发板,4B 4GB,开发板,advanced,2,2,201室 A柜,卡片电脑，适合视觉、AI、网关类项目。
+A-025,Raspberry Pi Pico 开发板,RP2040,开发板,advanced,6,6,201室 A柜,双核微控制器，支持 MicroPython，便宜耐造。
 S-003,DHT22 温湿度传感器,DHT22 / AM2302,传感器,basic,10,10,201室 B柜,数字温湿度传感器，单总线通信，注意数据脚需上拉。
 S-007,土壤湿度传感器,HL-69,传感器,basic,6,6,201室 B柜,检测土壤含水量的模拟量传感器，自动浇花项目核心件。
 S-009,红外循迹传感器,TCRT5000,传感器,basic,8,8,201室 B柜,反射式红外光电传感器，循迹小车标配。

@@ -160,6 +160,21 @@ POST /api/agent/chat
 
 说明：`intent` 取值 `troubleshoot`（排障）/ `recommend`（求推荐，此时 `bom` 字段为 BOM 结构化数据）/ `inventory`（查库存）/ `chitchat`（走通用 RAG 问答）。`steps` 是编排引擎的中间调用过程，前端用于展示"多能力协作"。
 
+## 11. 知识卡片全文
+
+```
+GET /api/cards/{card_id}
+返回: { "code": 0, "msg": "ok",
+       "data": { "card_id": "KC-S-003-common_errors", "material_id": "S-003",
+                 "card_type": "common_errors", "title": "DHT22 最容易踩的三个坑",
+                 "points": ["...", "...", "..."],
+                 "content": "## 详细说明\n...（markdown 正文）",
+                 "source": "https://learn.adafruit.com/dht",
+                 "helpful_count": 0 } }
+```
+
+说明：卡片详情页（保姆级教程）的数据源；`source` 为卡片编写时参考的官方资料网址。
+
 ---
 
 ## 业务错误码

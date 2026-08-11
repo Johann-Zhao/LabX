@@ -100,6 +100,7 @@ def parse_card_file(path: str) -> dict | None:
         "title": str(meta.get("title") or stem),
         "points": json.dumps(meta.get("points") or [], ensure_ascii=False),
         "content": text[end + 4 :].strip(),
+        "source": str(meta.get("source") or "").strip(),
         "contributor_id": meta.get("contributor_id"),
         "helpful_count": 0,
         "created_at": datetime.now(),

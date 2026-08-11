@@ -68,6 +68,7 @@ class KnowledgeCard(Base):
     title = Column(String(300), nullable=False)
     points = Column(Text, nullable=False, default="[]")  # 三条要点，JSON 数组字符串
     content = Column(Text)  # 正文 markdown
+    source = Column(String(500))  # 资料来源网址（官方文档/数据手册/教程）
     media_urls = Column(Text)  # 关联图片/视频，JSON 数组字符串
     contributor_id = Column(String(32))  # 贡献者（社区经验 tip 用）
     helpful_count = Column(Integer, default=0)  # "有用"投票数

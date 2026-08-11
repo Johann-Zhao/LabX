@@ -19,12 +19,19 @@ const dueText = computed(() => (lastBorrowResult.due_at || '').slice(0, 10))
           <p class="line">物料：{{ lastBorrowResult.material_name }}（{{ lastBorrowResult.material_id }}）</p>
           <p class="line">请在 <b>{{ dueText }}</b> 前归还</p>
 
-          <!-- 借用触发的知识卡片：阶段 2 接入后端推送后此处自动展示 -->
+          <!-- 借用触发的知识卡片：三要点 + "查看全部"深入入口（保姆级教程） -->
           <el-card v-if="lastBorrowResult.knowledge_card" class="kcard" shadow="never">
             <template #header>{{ lastBorrowResult.knowledge_card.title }}</template>
             <ol>
               <li v-for="(p, i) in lastBorrowResult.knowledge_card.points" :key="i">{{ p }}</li>
             </ol>
+            <el-button
+              text
+              type="primary"
+              @click="router.push(`/cards/${lastBorrowResult.knowledge_card.card_id}`)"
+            >
+              查看全部教程 →
+            </el-button>
           </el-card>
 
           <el-button type="primary" @click="router.push('/')">再逛逛</el-button>

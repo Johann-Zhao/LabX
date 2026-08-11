@@ -4,6 +4,8 @@
 编排引擎在 orchestrator.py；检索见 rag.py，LLM 封装见 llm.py。
 接口契约见仓库根目录 API.md，改动契约先在群里同步。
 """
+import json
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -138,6 +140,26 @@ def get_material(material_id: str, db: Session = Depends(get_db)):
             {"card_id": c.id, "card_type": c.card_type, "title": c.title} for c in cards
         ],
         "tips_count": sum(1 for c in cards if c.card_type == "tip"),
+    })
+
+
+# ---------- 知识卡片全文 ----------
+
+@app.get("/api/cards/{card_id}")
+def get_card(card_id: str, db: Session = Depends(get_db)):
+    """知识卡片全文（详情页"查看全部"入口）：标题、三要点、正文 markdown、来源网址。"""
+    c = db.get(KnowledgeCard, card_id)
+    if c is None:
+        return err(404, f"知识卡片 {card_id} 不存在")
+    return ok("ok", {
+        "card_id": c.id,
+        "material_id": c.material_id,
+        "card_type": c.card_type,
+        "title": c.title,
+        "points": json.loads(c.points),
+        "content": c.content,
+        "source": c.source,
+        "helpful_count": c.helpful_count,
     })
 
 

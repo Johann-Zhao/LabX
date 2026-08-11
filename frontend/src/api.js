@@ -68,3 +68,9 @@ export async function fetchUsers() {
   const { data } = await http.get('/users')
   return data
 }
+
+// 知识卡片全文（详情页"查看全部"入口）
+export async function fetchCard(cardId) {
+  const { data } = await http.get(`/cards/${cardId}`)
+  return data
+}

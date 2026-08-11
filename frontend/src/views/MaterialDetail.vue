@@ -101,10 +101,16 @@ async function doBorrow(safetyConfirmed) {
           <el-descriptions-item label="社区经验">{{ material.tips_count }} 条</el-descriptions-item>
         </el-descriptions>
 
-        <!-- 知识卡片（数字分身）由阶段 2 接入，当前后端返回空列表 -->
+        <!-- 数字分身知识卡片：点击进入全文页（保姆级教程） -->
         <div v-if="material.knowledge_cards?.length" class="cards">
-          <div v-for="c in material.knowledge_cards" :key="c.card_id" class="kcard">
-            {{ c.title }}
+          <div
+            v-for="c in material.knowledge_cards"
+            :key="c.card_id"
+            class="kcard"
+            @click="router.push(`/cards/${c.card_id}`)"
+          >
+            <span>{{ c.title }}</span>
+            <span class="arrow">→</span>
           </div>
         </div>
 
@@ -169,6 +175,16 @@ async function doBorrow(safetyConfirmed) {
   border: 1px solid #ebeef5;
   border-radius: 6px;
   margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+.kcard:hover {
+  border-color: #42b883;
+}
+.kcard .arrow {
+  color: #42b883;
 }
 .borrow-btn {
   width: 100%;
