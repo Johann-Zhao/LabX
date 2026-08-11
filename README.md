@@ -19,7 +19,8 @@ cd backend
 python -m venv venv
 source venv/Scripts/activate        # Git Bash；CMD 用 venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn main:app --reload           # http://127.0.0.1:8000/api/ping 应返回 {"msg":"pong"}
+python init_db.py                   # 建表 + 灌入样例物料/用户（C 给了 deta/materials.csv 后重新跑即导入）
+uvicorn main:app --reload           # http://127.0.0.1:8000/docs 可在线看接口文档
 
 # 前端（另开一个终端）
 cd frontend
@@ -27,7 +28,7 @@ npm install
 npm run dev                         # 浏览器打开 http://localhost:5173
 ```
 
-浏览器点"Ping 后端"显示 **pong** 即前后端链路打通（阶段 0 验收）。
+浏览器打开即是物料列表页：点进物料 → 确认借用 → 库存减 1 → "我的借用"里归还 → 库存加 1（v0.1 验收链路）。
 
 手机调试：手机与电脑连同一 WiFi，访问 `http://<电脑局域网IP>:5173`。前端统一走相对路径 `/api` + vite proxy 转发，**不要**把 axios 的 baseURL 写死成 localhost。
 

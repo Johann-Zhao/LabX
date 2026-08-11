@@ -70,14 +70,18 @@ cd frontend && npm run dev        # http://localhost:5173，/api 由 vite proxy 
 ## 9. 当前进度（每完成一个环节就更新这里）
 
 - [x] 阶段 0：骨架 + API 契约 + 假接口（commit `5f39399`）
-- [ ] 阶段 1：借还 MVP —— 建表 / 真实借还接口 / 前端三页面 ← **当前在这里**
-- [ ] 阶段 2：Chroma 灌库 + RAG 问答 + 借用弹知识卡片 + FastMCP 封装
+- [x] 阶段 1：借还 MVP —— 三表 + 真实借还接口 + 前端四页面，v0.1 浏览器走查通过（commits `d04427b`/`4e8b18d`/`2dbb569`）
+- [ ] 阶段 2：Chroma 灌库 + RAG 问答 + 借用弹知识卡片 + FastMCP 封装 ← **当前在这里**
 - [ ] 阶段 3：编排引擎（排障对话）+ recommend_bom 接 LLM + 归还心得草稿 + 分级权限
 - [ ] 阶段 4：演示数据灌满 + 全流程测试 + 部署固化 + 录视频
 
-**环节 1 待办细节**（做完划掉）：
-1. `backend/db.py` 按附录 A 建 materials / users / borrow_records 三表（materials 加 `description` 字段存"一句用途说明"；borrow_records 去掉用不到的 `borrow_type`，status 增加 `pending` 支持专业级审批）
-2. `backend/init_db.py`：建表 + 3 条样例物料 + 2 个测试用户（2024001 小王 / 2024002 小李）；若 `deta/materials.csv` 存在则改从 CSV 导入
-3. `main.py` 把 materials / borrow / return / records 换成真实 DB 实现；ask / recommend_bom / experience 保持假数据（阶段 2/3 再接）
-4. 前端：物料列表页 / 物料详情页 / 借用结果页 / 借用记录页（装 element-plus、vue-router）
-5. v0.1 验收：列表→详情→借用→库存减1→归还→库存加1，记录页能看到流水
+**阶段 2 待办细节**（做完划掉）：
+1. `db.py` 增加 knowledge_cards 表（照附录 A：id/material_id/card_type/title/content/media_urls/contributor_id/helpful_count/created_at）
+2. `init_db.py` 扩展：读 `deta/cards/*.md`（C 产出，front-matter 带 material_id/card_type）灌入知识卡片；先用 3 张 DHT22 样例卡片跑通
+3. `borrow` 返回真实 knowledge_card：按 material_id 查 common_errors 类型卡片，content 拆三要点
+4. `llm.py`：OpenAI 兼容客户端封装，读 `.env` 的 LABX_* 配置，`LABX_LLM_MOCK=true` 时返回预置答案
+5. `rag.py`：Chroma 灌库（每卡片一 document，metadata 带 material_id/card_type）+ 检索函数
+6. `ask` 接 RAG：material_id 精确过滤 + 向量 top-3 → 拼 prompt → LLM 生成（带引用）
+7. FastMCP 薄封装 material / knowledge 两组工具（`backend/mcp_servers/`）
+8. 前端：问答页（/ask）；借用结果页知识卡片已预留（knowledge_card 非空即展示）
+9. v0.2 验收：借 DHT22 弹出"数据脚必须接上拉电阻"卡片；问答页提问引用正确卡片；断外网问答返回兜底不报错
