@@ -35,14 +35,18 @@ export async function fetchRecords(userId = '') {
 }
 
 // RAG 问答。materialId 可空——传入则限定该物料的知识上下文（数字分身对话窗）
+// 含 LLM 调用，耗时可能超过全局 10s 超时，单独放宽
 export async function askQuestion(question, materialId = null) {
-  const { data } = await http.post('/ask', { question, material_id: materialId })
+  const { data } = await http.post('/ask', { question, material_id: materialId }, { timeout: 60000 })
   return data
 }
 
 // 智能体对话（意图识别 + 澄清 + 多能力编排，返回 steps / provenance / clarify / bom）
+// 该链路含多次 LLM 调用（意图分类 + 联网检索 + 综合生成），耗时可达数十秒，单独放宽超时
 export async function agentChat(userId, message, convId) {
-  const { data } = await http.post('/agent/chat', { user_id: userId, message, conv_id: convId })
+  const { data } = await http.post('/agent/chat',
+    { user_id: userId, message, conv_id: convId },
+    { timeout: 120000 })
   return data
 }
 

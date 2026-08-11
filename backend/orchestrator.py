@@ -36,6 +36,7 @@ _CONV: dict[str, dict] = {}
 
 _SELF_OWNED_OPTION = "都不是，是我自己的物料"
 _ESCAPE_OPTION = "不用问了，直接回答"  # 逃生项：用户有权跳过澄清
+_OTHER_PHENOMENON_OPTION = "其他"  # 现象候选项兜底：只表示"不在列表里"，不等于现象已知
 
 
 def classify_intent(message: str) -> str:
@@ -401,6 +402,13 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict
             slots["custom_material"] = message
             slots.pop("guess_id", None)
         elif awaiting == "phenomenon":
+            if message == _OTHER_PHENOMENON_OPTION:
+                # "其他"只是排除了候选项，必须再追问自由描述，拿到描述才算槽位齐备
+                return _clarify(state, pending["intent"], original, slots, "phenomenon_free",
+                                steps, [_ESCAPE_OPTION],
+                                "好的，那具体是什么现象？用一句话描述（如：上电完全没反应、转两下就停、读数一直是 0）")
+            slots["phenomenon"] = message
+        elif awaiting == "phenomenon_free":
             slots["phenomenon"] = message
         # 槽位推进后重入流程：还有缺失槽位会继续问，齐了自然回答
         return _dispatch(db, user_id, original, steps, state,
