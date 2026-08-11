@@ -146,7 +146,8 @@ LOCAL_HIT_THRESHOLD_OPEN = 2.5    # 全库开放检索
 LOCAL_HIT_THRESHOLD_IN_MATERIAL = 1.0  # 已定位物料的物料内检索
 
 
-def _ladder_answer(question: str, target, spare_text: str, names: str, steps: list) -> tuple[str, list, str]:
+def _ladder_answer(question: str, target, spare_text: str, names: str, steps: list,
+                   custom_material: str | None = None) -> tuple[str, list, str]:
     """返回 (answer, references, provenance)。流程见 docs/agent-workflow.md。"""
     query_text = f"{target.name} {question}" if target else question
 
@@ -157,12 +158,23 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
     if not hits and target:
         hits = [h for h in rag.query(query_text, top_k=3) if h["score"] >= LOCAL_HIT_THRESHOLD_OPEN]
     if hits:
+        # 引用卫生：只保留"与最高分同物料"或"分数接近最高分（≥60%）"的，防止无关卡片混入参考列表
+        top_score = hits[0]["score"]
+        top_material = hits[0].get("material_id")
+        hits = [h for h in hits if h.get("material_id") == top_material or h["score"] >= top_score * 0.6]
         steps.append({"step": "本地知识库命中", "detail": "、".join(f"《{h['title']}》" for h in hits)})
         context = "\n\n".join(f"【{h['title']}】\n{h['text']}" for h in hits)
+        # 用户自带物料但本地只有相关物料的资料：必须披露假设，不能假装本地收录了该物料
+        disclosure = (
+            f"注意：学生的物料「{custom_material}」本地没有专属资料，检索到的是相关物料的资料。"
+            "回答开头必须声明这个假设（如「本地没有它的专属资料，以下按最相关的方案排查」），"
+            "结尾提示学生：如果实际驱动/接线不同，告诉我具体型号我再细查。"
+            if custom_material else ""
+        )
         raw = _gen(
             "你是高校创新空间的排障/答疑专家。根据给定的知识片段回答，给出最可能原因 + 分步排查/操作清单"
             + (" + 备件路径。" if spare_text else "。")
-            + "语气直接、给操作指令，250 字以内。",
+            + "语气直接、给操作指令，250 字以内。" + disclosure,
             f"学生问题：{question}\n借用上下文：{names}\n{spare_text}\n知识片段：\n{context}",
         )
         refs = [{"card_id": h["card_id"], "title": h["title"], "url": None} for h in hits]
@@ -278,7 +290,8 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
         steps.append({"step": "定位故障物料", "detail": "未定位到物料，按通用排障处理"})
         spare_text = ""
 
-    answer, refs, provenance = _ladder_answer(question, target, spare_text, names, steps)
+    answer, refs, provenance = _ladder_answer(question, target, spare_text, names, steps,
+                                              custom_material=slots.get("custom_material"))
     return _resp(0, "ok", {
         "intent": "troubleshoot", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
