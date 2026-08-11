@@ -61,7 +61,7 @@ POST /api/borrow
 - `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交（**阶段 3 启用**，当前后端不拦截）。
 - 进阶级未确认 → `code: 1002`，`data.safety_notice` 为安全要点文案；专业级 → `code: 1003`。
 - 重复借用（同一用户对该物料有未完结记录）→ `code: 1005`，`data.record_id` 为已有记录。
-- 借用成功后 `knowledge_card` 为借用触发推送的单张知识卡片（三要点结构）；**阶段 2 接入前恒为 `null`**。
+- 借用成功后 `knowledge_card` 为借用触发推送的单张知识卡片（三要点结构，取该物料的 common_errors 卡片）；该物料没有任何卡片时为 `null`。
 
 ## 4. 归还
 

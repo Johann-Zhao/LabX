@@ -1,17 +1,19 @@
 """LabX 后端。
 
-阶段 1：materials / borrow / return / records 已接真实数据库（SQLite via SQLAlchemy）；
-ask / recommend_bom / experience 仍是假数据（阶段 2 接 RAG，阶段 3 接 LLM 与编排引擎）。
+阶段 1：materials / borrow / return / records 已接真实数据库（SQLite via SQLAlchemy）。
+阶段 2 进行中：借用成功返回该物料的真实知识卡片（knowledge_cards 表）；
+ask / recommend_bom / experience 仍是假数据（ask 接 RAG、其余由阶段 3 接 LLM 与编排引擎）。
 接口契约见仓库根目录 API.md，改动契约先在群里同步。
 """
 from datetime import datetime, timedelta
+import json
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, Material, SessionLocal, User, display_status
+from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
@@ -130,14 +132,17 @@ def list_materials(keyword: str = "", category: str = "", db: Session = Depends(
 
 @app.get("/api/materials/{material_id}")
 def get_material(material_id: str, db: Session = Depends(get_db)):
-    """物料详情。knowledge_cards / tips_count 由阶段 2 接入知识库后填充。"""
+    """物料详情：基础信息 + 知识卡片摘要 + 社区经验条数。"""
     m = db.get(Material, material_id)
     if m is None:
         return err(404, f"物料 {material_id} 不存在")
+    cards = db.query(KnowledgeCard).filter(KnowledgeCard.material_id == material_id).all()
     return ok("ok", {
         **material_dict(m),
-        "knowledge_cards": [],
-        "tips_count": 0,
+        "knowledge_cards": [
+            {"card_id": c.id, "card_type": c.card_type, "title": c.title} for c in cards
+        ],
+        "tips_count": sum(1 for c in cards if c.card_type == "tip"),
     })
 
 
@@ -184,8 +189,26 @@ def borrow(req: BorrowReq, db: Session = Depends(get_db)):
         "status": "active",
         "borrowed_at": iso(record.borrowed_at),
         "due_at": iso(record.due_at),
-        "knowledge_card": None,  # 阶段 2 接入借用触发的知识卡片推送
+        "knowledge_card": push_card_dict(db, m.id),
     })
+
+
+def push_card_dict(db: Session, material_id: str) -> dict | None:
+    """借用触发的知识推送：取该物料的"常见错误"卡片（没有则取任意一张）。"""
+    card = db.query(KnowledgeCard).filter(
+        KnowledgeCard.material_id == material_id,
+        KnowledgeCard.card_type == "common_errors",
+    ).first() or db.query(KnowledgeCard).filter(
+        KnowledgeCard.material_id == material_id
+    ).first()
+    if card is None:
+        return None
+    return {
+        "card_id": card.id,
+        "title": card.title,
+        "points": json.loads(card.points),
+        "link": f"/materials/{material_id}",
+    }
 
 
 @app.post("/api/return")

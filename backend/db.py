@@ -8,7 +8,7 @@
 import os
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +57,21 @@ class BorrowRecord(Base):
     due_at = Column(DateTime, nullable=False)
     returned_at = Column(DateTime)
     experience_shared = Column(Boolean, default=False)  # 归还时是否已分享心得
+
+
+class KnowledgeCard(Base):
+    __tablename__ = "knowledge_cards"
+
+    id = Column(String(64), primary_key=True)  # KC-<文件名>，如 KC-S-003-manual
+    material_id = Column(String(32), nullable=False)  # 关联物料 ID
+    card_type = Column(String(20), nullable=False)  # manual/quickstart/common_errors/tip
+    title = Column(String(300), nullable=False)
+    points = Column(Text, nullable=False, default="[]")  # 三条要点，JSON 数组字符串
+    content = Column(Text)  # 正文 markdown
+    media_urls = Column(Text)  # 关联图片/视频，JSON 数组字符串
+    contributor_id = Column(String(32))  # 贡献者（社区经验 tip 用）
+    helpful_count = Column(Integer, default=0)  # "有用"投票数
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
 
 
 def display_status(record: "BorrowRecord") -> str:

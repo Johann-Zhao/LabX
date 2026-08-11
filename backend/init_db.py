@@ -7,19 +7,26 @@
 1. ../deta/materials.csv 存在 → 从 CSV 导入（成员 C 维护）
 2. 否则 → 写入 3 条内置样例物料
 
+知识卡片来源：../deta/cards/*.md（YAML front-matter + markdown 正文，成员 C 维护）。
+front-matter 字段：material_id / card_type / title / points（三条要点列表）。
+
 CSV 格式（UTF-8 保存，第一行表头，Excel 另存为 CSV 即可）：
 material_id,name,model,category,access_level,total_quantity,available_quantity,location,description
 
 测试用户始终写入：2024001 小王、2024002 小李（演示"换个账号"用）。
 """
 import csv
+import json
 import os
 from datetime import datetime
 
-from db import Base, BorrowRecord, Material, SessionLocal, User, engine
+import yaml
+
+from db import Base, BorrowRecord, KnowledgeCard, Material, SessionLocal, User, engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "..", "deta", "materials.csv")
+CARDS_DIR = os.path.join(BASE_DIR, "..", "deta", "cards")
 
 SAMPLE_MATERIALS = [
     {
@@ -71,6 +78,49 @@ def load_materials() -> list[dict]:
     return SAMPLE_MATERIALS
 
 
+def parse_card_file(path: str) -> dict | None:
+    """解析一张知识卡片 markdown：--- 包住的 YAML front-matter + 正文。"""
+    text = open(path, encoding="utf-8").read()
+    if not text.startswith("---"):
+        print(f"  跳过 {os.path.basename(path)}：缺少 front-matter")
+        return None
+    end = text.find("\n---", 3)
+    if end == -1:
+        print(f"  跳过 {os.path.basename(path)}：front-matter 未闭合")
+        return None
+    meta = yaml.safe_load(text[3:end])
+    if not meta.get("material_id") or not meta.get("card_type"):
+        print(f"  跳过 {os.path.basename(path)}：front-matter 缺 material_id/card_type")
+        return None
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return {
+        "id": f"KC-{stem}",
+        "material_id": str(meta["material_id"]).strip(),
+        "card_type": str(meta["card_type"]).strip(),
+        "title": str(meta.get("title") or stem),
+        "points": json.dumps(meta.get("points") or [], ensure_ascii=False),
+        "content": text[end + 4 :].strip(),
+        "contributor_id": meta.get("contributor_id"),
+        "helpful_count": 0,
+        "created_at": datetime.now(),
+    }
+
+
+def load_cards() -> list[dict]:
+    """读取 deta/cards/ 下所有 markdown 知识卡片。"""
+    if not os.path.isdir(CARDS_DIR):
+        print(f"未找到 {os.path.abspath(CARDS_DIR)}，跳过知识卡片导入")
+        return []
+    cards = []
+    for fn in sorted(os.listdir(CARDS_DIR)):
+        if fn.endswith(".md"):
+            card = parse_card_file(os.path.join(CARDS_DIR, fn))
+            if card:
+                cards.append(card)
+    print(f"从 deta/cards/ 导入 {len(cards)} 张知识卡片")
+    return cards
+
+
 def main() -> None:
     # 清库重建：演示数据随时可推倒重来
     Base.metadata.drop_all(engine)
@@ -82,6 +132,8 @@ def main() -> None:
             db.add(User(id=u["id"], name=u["name"], created_at=datetime.now()))
         for m in load_materials():
             db.add(Material(**m, created_at=datetime.now(), updated_at=datetime.now()))
+        for c in load_cards():
+            db.add(KnowledgeCard(**c))
         db.commit()
     finally:
         db.close()
@@ -92,6 +144,7 @@ def main() -> None:
         print(f"users: {[u.id + ' ' + u.name for u in db.query(User).all()]}")
         for m in db.query(Material).all():
             print(f"  {m.id} {m.name} [{m.category}/{m.access_level}] 库存 {m.available_quantity}/{m.total_quantity} @ {m.location}")
+        print(f"knowledge_cards: {db.query(KnowledgeCard).count()} 张")
         print(f"borrow_records: {db.query(BorrowRecord).count()} 条（应为 0）")
     finally:
         db.close()
