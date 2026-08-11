@@ -58,9 +58,10 @@ POST /api/borrow
 ```
 
 说明：
-- `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交。
+- `safety_confirmed`：进阶级物料首次借用时，前端弹一屏安全要点，学生勾选"我已知晓"后置 `true` 重新提交（**阶段 3 启用**，当前后端不拦截）。
 - 进阶级未确认 → `code: 1002`，`data.safety_notice` 为安全要点文案；专业级 → `code: 1003`。
-- 借用成功后 `knowledge_card` 为借用触发推送的单张知识卡片（三要点结构）；无卡片时该字段为 `null`。
+- 重复借用（同一用户对该物料有未完结记录）→ `code: 1005`，`data.record_id` 为已有记录。
+- 借用成功后 `knowledge_card` 为借用触发推送的单张知识卡片（三要点结构）；**阶段 2 接入前恒为 `null`**。
 
 ## 4. 归还
 
@@ -73,7 +74,7 @@ POST /api/return
                  "experience_draft": "这次用 DHT22 测温室数据比较顺利，提醒大家：数据脚一定记得接上拉电阻……" } }
 ```
 
-说明：`experience_draft` 为 AI 预填的心得草稿，前端弹出供学生修改或确认后调 `POST /api/experience` 发布（非强制）。
+说明：`experience_draft` 为 AI 预填的心得草稿，前端弹出供学生修改或确认后调 `POST /api/experience` 发布（非强制）。**阶段 3 接入 LLM 前恒为 `null`**。
 
 ## 5. 借用流水
 
@@ -147,4 +148,4 @@ POST /api/experience
 | 1004 | 记录不存在或当前状态不允许该操作 |
 | 1005 | 你已借出该物料（重复借用） |
 
-> 阶段 0 假接口只会返回 0 / 404 / 1002 / 1003；1001 / 1004 / 1005 为阶段 1 真实状态机预留。
+> 当前状态：materials / borrow / return / records 为真实数据库实现（阶段 1 完成）；ask / recommend_bom / experience 仍为假数据（阶段 2/3 替换）；1002 / 1003 权限拦截由阶段 3 启用。
