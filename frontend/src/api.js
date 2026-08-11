@@ -29,3 +29,9 @@ export async function fetchRecords(userId = '') {
   const { data } = await http.get('/records', { params: { user_id: userId } })
   return data
 }
+
+// RAG 问答。materialId 可空——传入则限定该物料的知识上下文（数字分身对话窗）
+export async function askQuestion(question, materialId = null) {
+  const { data } = await http.post('/ask', { question, material_id: materialId })
+  return data
+}

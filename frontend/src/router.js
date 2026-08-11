@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import AskPage from './views/AskPage.vue'
 import BorrowResult from './views/BorrowResult.vue'
 import MaterialDetail from './views/MaterialDetail.vue'
 import MaterialList from './views/MaterialList.vue'
@@ -11,6 +12,7 @@ const router = createRouter({
     { path: '/', name: 'materials', component: MaterialList, meta: { title: '物料' } },
     { path: '/materials/:id', name: 'material-detail', component: MaterialDetail },
     { path: '/borrow/result', name: 'borrow-result', component: BorrowResult },
+    { path: '/ask', name: 'ask', component: AskPage, meta: { title: '问答' } },
     { path: '/records', name: 'records', component: RecordsPage, meta: { title: '我的借用' } },
   ],
 })

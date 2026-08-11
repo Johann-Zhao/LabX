@@ -101,6 +101,13 @@ async function onBorrow() {
         >
           {{ material.available_quantity === 0 ? '暂时缺货' : '确认借用' }}
         </el-button>
+        <el-button
+          size="large"
+          class="ask-btn"
+          @click="router.push({ path: '/ask', query: { material_id: material.material_id } })"
+        >
+          问问 AI（该物料专属助教）
+        </el-button>
       </el-card>
     </template>
   </div>
@@ -137,5 +144,10 @@ async function onBorrow() {
 .borrow-btn {
   width: 100%;
   margin-top: 16px;
+}
+.ask-btn {
+  width: 100%;
+  margin-top: 8px;
+  margin-left: 0;
 }
 </style>
