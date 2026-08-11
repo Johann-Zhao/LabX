@@ -207,13 +207,16 @@ def ask_core(question: str, material_id: str | None = None, top_k: int = 3) -> d
     """RAG 问答：物料内精确过滤 → 向量检索 top_k → LLM 生成（带引用）。
 
     LLM 不可达时 llm.chat 自动降级为兜底答案，永远返回 code 0（见 NFR2）。
+    检索分数低于阈值视为未命中（与 orchestrator 的阶梯口径一致，见 docs/agent-workflow.md）。
     """
     import llm
     import rag
 
     hits = rag.query(question, material_id=material_id, top_k=top_k)
+    threshold = 1.0 if material_id else 2.5
+    hits = [h for h in hits if h["score"] >= threshold]
     if not hits and material_id:
-        hits = rag.query(question, top_k=top_k)  # 物料内没命中 → 全库兜底
+        hits = [h for h in rag.query(question, top_k=top_k) if h["score"] >= 2.5]  # 物料内没命中 → 全库兜底
     if not hits:
         return _resp(0, "ok", {
             "answer": "知识库里还没有相关内容，可以换个问法，或联系管理员补充该物料的知识卡片。",

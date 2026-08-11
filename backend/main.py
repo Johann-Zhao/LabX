@@ -52,6 +52,7 @@ class ExperienceReq(BaseModel):
 class AgentChatReq(BaseModel):
     user_id: str
     message: str
+    conv_id: str = "default"  # 前端为每个对话页生成的会话 ID，用于澄清状态挂起/恢复
 
 
 # ---------- 工具函数 ----------
@@ -207,9 +208,12 @@ def list_users(db: Session = Depends(get_db)):
 
 @app.post("/api/agent/chat")
 def agent_chat_endpoint(req: AgentChatReq, db: Session = Depends(get_db)):
-    """智能体对话：意图识别 → 编排调用 → 综合生成。steps 为中间调用过程（演示展示用）。"""
+    """智能体对话：意图识别 → 槽位检查（必要时澄清）→ 本地/联网/通用阶梯 → 综合生成。
+
+    交互规则见 docs/agent-workflow.md；steps 为中间调用过程（演示展示用）。
+    """
     from orchestrator import agent_chat
-    return agent_chat(db, req.user_id, req.message)
+    return agent_chat(db, req.user_id, req.message, req.conv_id)
 
 
 # ---------- 愿望到方案与经验沉淀（核心逻辑在 services.py） ----------
