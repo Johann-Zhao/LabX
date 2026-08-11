@@ -93,6 +93,10 @@ def parse_card_file(path: str) -> dict | None:
         print(f"  跳过 {os.path.basename(path)}：front-matter 缺 material_id/card_type")
         return None
     stem = os.path.splitext(os.path.basename(path))[0]
+    # source 可能是单个网址或多个网址的列表，统一存为空格分隔的字符串
+    source_raw = meta.get("source") or ""
+    if isinstance(source_raw, list):
+        source_raw = " ".join(str(s) for s in source_raw)
     return {
         "id": f"KC-{stem}",
         "material_id": str(meta["material_id"]).strip(),
@@ -100,7 +104,7 @@ def parse_card_file(path: str) -> dict | None:
         "title": str(meta.get("title") or stem),
         "points": json.dumps(meta.get("points") or [], ensure_ascii=False),
         "content": text[end + 4 :].strip(),
-        "source": str(meta.get("source") or "").strip(),
+        "source": str(source_raw).strip(),
         "contributor_id": meta.get("contributor_id"),
         "helpful_count": 0,
         "created_at": datetime.now(),
