@@ -1,59 +1,55 @@
 <script setup>
-import { ref } from 'vue'
-import axios from 'axios'
-
-// 阶段 0 验收页：点击按钮调用 GET /api/ping，显示 pong 即前后端链路打通
-const result = ref('')
-const loading = ref(false)
-
-async function ping() {
-  loading.value = true
-  try {
-    const { data } = await axios.get('/api/ping')
-    result.value = data.msg
-  } catch (e) {
-    result.value = '请求失败：' + e.message
-  } finally {
-    loading.value = false
-  }
-}
+import { currentUser } from './store'
 </script>
 
 <template>
-  <main class="page">
-    <h1>LabX</h1>
-    <p>阶段 0 验收：点击按钮，显示 pong 即前后端链路打通</p>
-    <button :disabled="loading" @click="ping">
-      {{ loading ? '请求中…' : 'Ping 后端' }}
-    </button>
-    <p v-if="result" class="result">{{ result }}</p>
-  </main>
+  <header class="topbar">
+    <span class="logo">LabX 创新空间</span>
+    <span class="user">{{ currentUser.name }}（{{ currentUser.id }}）</span>
+  </header>
+
+  <nav class="tabs">
+    <router-link to="/" class="tab" exact-active-class="active">物料</router-link>
+    <router-link to="/records" class="tab" active-class="active">我的借用</router-link>
+  </nav>
+
+  <router-view />
 </template>
 
 <style scoped>
-.page {
+.topbar {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  padding-top: 15vh;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 8px 4px 12px;
 }
-button {
-  font-size: 18px;
-  padding: 10px 28px;
-  border-radius: 8px;
-  border: none;
-  background: #42b883;
-  color: #fff;
-  cursor: pointer;
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.result {
-  font-size: 24px;
+.logo {
+  font-size: 20px;
   font-weight: bold;
   color: #42b883;
+}
+.user {
+  font-size: 13px;
+  color: #909399;
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tab {
+  flex: 1;
+  text-align: center;
+  padding: 10px 0;
+  border-radius: 8px;
+  background: #fff;
+  color: #606266;
+  text-decoration: none;
+  font-size: 15px;
+}
+.tab.active {
+  background: #42b883;
+  color: #fff;
+  font-weight: bold;
 }
 </style>
