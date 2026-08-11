@@ -192,7 +192,8 @@ def _clarify(state: dict, intent: str, message: str, steps: list, options: list[
 
 
 def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
-                  allow_clarify: bool, forced_target_id: str | None = None) -> dict:
+                  allow_clarify: bool, forced_target_id: str | None = None,
+                  no_catalog_guess: bool = False) -> dict:
     """排障分支：确认上下文 → 槽位检查（物料+现象，不足则澄清）→ 阶梯回答。"""
     stats = get_user_stats_core(db, user_id)
     active = stats["active_borrows"] if stats else []
@@ -202,6 +203,9 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
     if forced_target_id:
         # 澄清后带回来的物料：直接采信，跳过定位
         target, score, from_borrows = db.get(Material, forced_target_id), 99, True
+    elif no_catalog_guess:
+        # 用户已明确"不是系统内的物料"：禁止目录猜测，按外部物料处理
+        target, score, from_borrows = None, 0, False
     else:
         target, score, from_borrows = _find_target_material(db, active, message)
 
@@ -291,11 +295,12 @@ def _inventory(db, message: str, steps: list) -> dict:
 # ---------- 编排入口 ----------
 
 def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool,
-              forced_intent: str | None, forced_target_id: str | None = None) -> dict:
+              forced_intent: str | None, forced_target_id: str | None = None,
+              no_catalog_guess: bool = False) -> dict:
     intent = forced_intent or classify_intent(message)
     steps.insert(0, {"step": "意图识别", "detail": f"识别为「{INTENT_LABELS[intent]}」"})
     if intent == "troubleshoot":
-        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, forced_target_id)
+        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, forced_target_id, no_catalog_guess)
     if intent == "recommend":
         return _recommend(db, user_id, message, steps)
     if intent == "inventory":
@@ -308,12 +313,26 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict
     state = _CONV.setdefault(conv_id, {})
     pending = state.pop("pending", None)
     if pending:
-        # 本条消息是对澄清问题的回答：与原始问题合并后重走流程，且不再允许二次澄清
-        forced_target = None
+        # 本条消息是对澄清问题的回答
+        if pending.get("awaiting_custom_material"):
+            # 用户补充了自带物料的名称/型号：不再做任何目录猜测，直接按外部物料回答
+            merged = f"{pending['message']}。用户自带物料：{message}"
+            steps = [{"step": "澄清补充", "detail": f"原问题「{pending['message']}」+ 自带物料「{message}」"}]
+            return _dispatch(db, user_id, merged, steps, state, allow_clarify=False,
+                             forced_intent=pending["intent"], no_catalog_guess=True)
         if message == _SELF_OWNED_OPTION:
-            merged = pending["message"]  # 系统外物料：不附加物料信息
-        elif pending.get("target_id"):
-            # 物料已定位、只补充现象的情况
+            # "都不是"只排除了系统内物料，还没问出是什么——再追问名称/型号（最后一轮澄清）
+            state["pending"] = {**pending, "awaiting_custom_material": True}
+            question = "好的，是你自己的物料。它叫什么名字、什么型号？（如 SG90 舵机、42 步进电机、直流减速电机）"
+            steps = [{"step": "信息不足，发起澄清", "detail": "物料不在系统中，追问名称/型号"}]
+            return _resp(0, "ok", {
+                "intent": pending["intent"], "steps": steps, "answer": question,
+                "references": [], "provenance": None,
+                "clarify": {"question": question, "options": []},
+            })
+        # 点了候选物料或回答了现象：与原始问题合并后重走流程，不再二次澄清
+        forced_target = None
+        if pending.get("target_id"):
             merged = f"{pending['message']}。具体现象：{message}"
             forced_target = pending["target_id"]
         elif pending["intent"] == "troubleshoot":

@@ -9,6 +9,7 @@
 import hashlib
 import math
 import os
+import re
 
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
@@ -126,8 +127,23 @@ def _idf_score(query_feats: list[str], doc_text: str) -> float:
     return score
 
 
+def _unknown_tokens(question: str) -> set[str]:
+    """查询中库内完全不认识的型号词（字母开头的字母数字串，如 sg90、dht11）。
+
+    中文按字二元进特征，不受此过滤影响——避免自然语言表述误杀（如"总是"）。
+    """
+    return {
+        tok for tok in re.findall(r"[a-z][a-z0-9]*", question.lower())
+        if len(tok) >= 2 and _DF is not None and _DF.get(tok, 0) == 0
+    }
+
+
 def query(question: str, material_id: str | None = None, top_k: int = 3) -> list[dict]:
-    """Chroma 粗召回 top_k*2 → IDF 重排取 top_k。score 为 IDF 重合度（越大越相关）。"""
+    """Chroma 粗召回 top_k*2 → IDF 重排取 top_k。score 为 IDF 重合度（越大越相关）。
+
+    若查询含有库内不认识的型号词（如 SG90），命中结果必须包含该词，
+    否则视为未命中——防止"问舵机答开发板"式的假命中。
+    """
     coll = _collection()
     if coll.count() == 0:
         return []
@@ -136,7 +152,10 @@ def query(question: str, material_id: str | None = None, top_k: int = 3) -> list
     res = coll.query(query_texts=[question], n_results=min(top_k * 2, coll.count()), **kwargs)
     hits = []
     q_feats = _features(question)
+    unknown = _unknown_tokens(question)
     for cid, doc, meta in zip(res["ids"][0], res["documents"][0], res["metadatas"][0]):
+        if unknown and not any(tok in (doc or "").lower() for tok in unknown):
+            continue  # 不含查询里的关键型号词，直接淘汰
         hits.append({
             "card_id": cid,
             "title": (doc or "").split("\n", 1)[0],
