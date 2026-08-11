@@ -1,12 +1,18 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchRecords, returnMaterial } from '../api'
+import { fetchRecords, returnMaterial, submitExperience } from '../api'
 import { currentUser } from '../store'
 
 const records = ref([])
 const loading = ref(false)
 const returningId = ref('')
+
+// 归还心得弹窗（AI 预填草稿，改一句话即可发布——把"创作"降为"改错"）
+const expDialog = ref(false)
+const expDraft = ref('')
+const expRecord = ref(null)
+const publishing = ref(false)
 
 const STATUS_META = {
   active: { text: '借用中', type: 'primary' },
@@ -51,8 +57,13 @@ async function onReturn(record) {
     const res = await returnMaterial(record.record_id)
     if (res.code === 0) {
       ElMessage.success('归还成功')
-      // 阶段 3：此处弹出 AI 预填的心得草稿（res.data.experience_draft）
       await load()
+      // AI 预填心得草稿：弹出供学生修改或确认（非强制）
+      if (res.data.experience_draft) {
+        expRecord.value = record
+        expDraft.value = res.data.experience_draft
+        expDialog.value = true
+      }
     } else {
       ElMessage.warning(res.msg)
     }
@@ -60,6 +71,29 @@ async function onReturn(record) {
     ElMessage.error('网络错误：' + e.message)
   } finally {
     returningId.value = ''
+  }
+}
+
+async function publishExperience() {
+  if (!expDraft.value.trim() || publishing.value) return
+  publishing.value = true
+  try {
+    const res = await submitExperience({
+      materialId: expRecord.value.material_id,
+      userId: currentUser.id,
+      content: expDraft.value.trim(),
+      recordId: expRecord.value.record_id,
+    })
+    if (res.code === 0) {
+      ElMessage.success('经验已分享，下一个借它的同学会看到')
+      expDialog.value = false
+    } else {
+      ElMessage.warning(res.msg)
+    }
+  } catch (e) {
+    ElMessage.error('网络错误：' + e.message)
+  } finally {
+    publishing.value = false
   }
 }
 
@@ -96,6 +130,16 @@ onMounted(load)
     <el-empty v-if="!loading && records.length === 0" description="还没有借用记录">
       <el-button type="primary" @click="$router.push('/')">去借一件</el-button>
     </el-empty>
+
+    <!-- 归还心得：AI 预填草稿，学生改一句话即可发布（非强制） -->
+    <el-dialog v-model="expDialog" title="用得顺利吗？" width="90%">
+      <p class="exp-tip">AI 根据你的借用情况预填了心得草稿，改一句话就能分享给下一个同学：</p>
+      <el-input v-model="expDraft" type="textarea" :rows="4" />
+      <template #footer>
+        <el-button @click="expDialog = false">不了，谢谢</el-button>
+        <el-button type="primary" :loading="publishing" @click="publishExperience">发布心得</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -128,5 +172,10 @@ onMounted(load)
 }
 .btn {
   margin-top: 10px;
+}
+.exp-tip {
+  color: #606266;
+  font-size: 13px;
+  margin: 0 0 8px;
 }
 </style>

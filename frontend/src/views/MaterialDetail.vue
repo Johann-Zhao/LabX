@@ -14,6 +14,11 @@ const borrowing = ref(false)
 const LEVEL_TYPE = { basic: 'success', advanced: 'warning', professional: 'danger' }
 const LEVEL_TEXT = { basic: '基础级', advanced: '进阶级', professional: '专业级' }
 
+// 安全确认弹窗（进阶级物料首次借用，1002）
+const safetyDialog = ref(false)
+const safetyNotice = ref('')
+const safetyChecked = ref(false)
+
 onMounted(async () => {
   const res = await fetchMaterial(route.params.id)
   loading.value = false
@@ -35,9 +40,13 @@ async function onBorrow() {
   } catch {
     return // 用户点了取消
   }
+  await doBorrow(false)
+}
+
+async function doBorrow(safetyConfirmed) {
   borrowing.value = true
   try {
-    const res = await borrowMaterial(currentUser.id, material.value.material_id)
+    const res = await borrowMaterial(currentUser.id, material.value.material_id, safetyConfirmed)
     if (res.code === 0) {
       Object.assign(lastBorrowResult, {
         record_id: res.data.record_id,
@@ -46,7 +55,15 @@ async function onBorrow() {
         due_at: res.data.due_at,
         knowledge_card: res.data.knowledge_card,
       })
+      safetyDialog.value = false
       router.push('/borrow/result')
+    } else if (res.code === 1002) {
+      // 首次借用该类物料：弹一屏安全要点，勾选"我已知晓"后重试
+      safetyNotice.value = res.data?.safety_notice || '请按规范操作，用完务必归位。'
+      safetyChecked.value = false
+      safetyDialog.value = true
+    } else if (res.code === 1003) {
+      ElMessageBox.alert(res.msg, '需要教师审批', { confirmButtonText: '知道了', type: 'warning' })
     } else if (res.code === 1005) {
       ElMessageBox.confirm(res.msg, '提示', {
         confirmButtonText: '去归还',
@@ -109,6 +126,18 @@ async function onBorrow() {
           问问 AI（该物料专属助教）
         </el-button>
       </el-card>
+
+      <!-- 进阶级物料首次借用：10 秒安全确认（一屏要点 + 勾选） -->
+      <el-dialog v-model="safetyDialog" title="安全确认（首次借用该类物料）" width="90%">
+        <p class="safety-text">{{ safetyNotice }}</p>
+        <el-checkbox v-model="safetyChecked">我已知晓以上安全要点</el-checkbox>
+        <template #footer>
+          <el-button @click="safetyDialog = false">取消</el-button>
+          <el-button type="primary" :disabled="!safetyChecked" :loading="borrowing" @click="doBorrow(true)">
+            确认并借用
+          </el-button>
+        </template>
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -149,5 +178,12 @@ async function onBorrow() {
   width: 100%;
   margin-top: 8px;
   margin-left: 0;
+}
+.safety-text {
+  white-space: pre-wrap;
+  color: #606266;
+  font-size: 14px;
+  line-height: 1.8;
+  margin: 0 0 12px;
 }
 </style>
