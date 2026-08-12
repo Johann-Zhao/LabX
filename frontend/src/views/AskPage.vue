@@ -2,7 +2,7 @@
 import { nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { agentChat, askQuestion, fetchMaterial } from '../api'
+import { agentChatStream, askQuestion, fetchMaterial } from '../api'
 import { currentUser } from '../store'
 import BomCard from './BomCard.vue'
 
@@ -19,6 +19,10 @@ const input = ref('')
 const thinking = ref(false)
 const listRef = ref(null)
 const expandedSteps = ref({})
+
+// 过程显化区（流式）：等待 final 期间逐行显示真实执行状态，最后一行带跳动圆点
+const streamLines = ref([])
+const streamActive = ref(false)
 
 const PROVENANCE_META = {
   local_kb: { text: '本地知识库', type: 'success' },
@@ -38,7 +42,7 @@ onMounted(async () => {
   } else {
     messages.value.push({
       role: 'assistant',
-      text: '你好，我是 LabX 智能助手。可以说"我想做自动浇花装置"让我出方案并一键预约，也可以说"我的电机不转"让我排障——没说清是什么物料时我会先问你。',
+      text: '你好，我是 LabX 智能助手。可以说"我想做自动浇花装置"让我出方案并一键预约，也可以说"我的电机不转"让我排障——没说清是什么物料时我会先问你。手里有物料不知道怎么用？直接问我"这块板子能做什么"。',
     })
   }
 })
@@ -54,16 +58,23 @@ async function sendText(text) {
   messages.value.push({ role: 'user', text })
   input.value = ''
   thinking.value = true
+  streamLines.value = []
+  streamActive.value = true
   scrollToBottom()
   try {
-    // 物料详情页进入 → 限定物料的 RAG 问答；否则走智能体编排（澄清/排障/方案/库存/联网）
+    // 物料详情页进入 → 限定物料的 RAG 问答；否则走智能体编排（流式过程显化，失败自动回退非流式）
     const res = materialId
       ? await askQuestion(text, materialId)
-      : await agentChat(currentUser.id, text, convId)
+      : await agentChatStream(currentUser.id, text, convId, (s) => {
+          streamLines.value.push(s)
+          scrollToBottom()
+        })
+    streamActive.value = false
     if (res.code === 0) {
       messages.value.push({
         role: 'assistant',
-        text: res.data.answer,
+        // 气泡是纯文本渲染（pre-wrap），洗掉 LLM 偶发输出的 markdown 加粗记号
+        text: (res.data.answer || '').replace(/\*\*/g, ''),
         refs: res.data.references || [],
         steps: res.data.steps || [],
         provenance: res.data.provenance || null,
@@ -77,6 +88,7 @@ async function sendText(text) {
     ElMessage.error('网络错误：' + e.message)
   } finally {
     thinking.value = false
+    streamActive.value = false
     scrollToBottom()
   }
 }
@@ -147,8 +159,22 @@ async function scrollToBottom() {
           </template>
         </div>
       </div>
+      <!-- 过程显化区（流式）：真实执行状态逐行显示，当前行带跳动圆点，final 到达后全部置灰 -->
       <div v-if="thinking" class="msg assistant">
-        <div class="bubble thinking">正在调用各能力模块协作处理…</div>
+        <div class="stream-proc">
+          <template v-if="streamLines.length">
+            <div
+              v-for="(line, i) in streamLines"
+              :key="i"
+              :class="['stream-line', { current: streamActive && i === streamLines.length - 1 }]"
+            >
+              {{ line }}
+              <span v-if="streamActive && i === streamLines.length - 1" class="dots"><i /><i /><i /></span>
+            </div>
+          </template>
+          <!-- 流式尚未产出第一行（或回退非流式）时的保底占位，不让用户干等 -->
+          <div v-else class="stream-line current">正在处理，请稍候<span class="dots"><i /><i /><i /></span></div>
+        </div>
       </div>
     </div>
 
@@ -216,8 +242,59 @@ async function scrollToBottom() {
   margin-left: 8px;
   vertical-align: middle;
 }
-.thinking {
-  color: #909399;
+.stream-proc {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  background: #f4f4f5;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.stream-line {
+  color: #c0c4cc; /* 已完成的状态行：置灰 */
+  line-height: 1.6;
+  animation: line-in 0.25s ease-out; /* 新行淡入上移 */
+}
+@keyframes line-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.stream-line.current {
+  color: #409eff;
+  font-weight: bold;
+}
+.dots i {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: #409eff;
+  animation: dot-bounce 0.9s infinite ease-in-out;
+}
+.dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes dot-bounce {
+  0%, 80%, 100% {
+    transform: scale(0.4);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 .steps {
   margin-bottom: 4px;

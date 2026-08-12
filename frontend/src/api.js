@@ -59,6 +59,45 @@ export async function agentChat(userId, message, convId) {
   return data
 }
 
+// 智能体对话（流式，过程显化）：fetch + NDJSON 逐行解析，status 事件实时回调 onStatus(text)，
+// final 事件 resolve 其 data；任何流错误或没有 final → 回退非流式 agentChat 兜底。
+// 返回与 agentChat 相同的响应体 { code, msg, data }，页面按 code 分支处理即可。
+export async function agentChatStream(userId, message, convId, onStatus) {
+  try {
+    const resp = await fetch('/api/agent/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, message, conv_id: convId }),
+    })
+    if (!resp.ok || !resp.body) throw new Error(`stream http ${resp.status}`)
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    let final = null
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let nl
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim()
+        buffer = buffer.slice(nl + 1)
+        if (!line) continue
+        let ev
+        try { ev = JSON.parse(line) } catch { continue }
+        if (ev.type === 'status') onStatus?.(ev.text)
+        else if (ev.type === 'final') final = ev.data
+        else if (ev.type === 'error') throw new Error(ev.msg)
+      }
+    }
+    if (!final) throw new Error('流未收到 final 事件')
+    return { code: 0, msg: 'ok', data: final }
+  } catch (e) {
+    // 回退：非流式接口兜底（行为与原来完全一致）
+    return agentChat(userId, message, convId)
+  }
+}
+
 // 愿望到方案
 export async function recommendBom(description, userId) {
   const { data } = await http.post('/recommend_bom', { description, user_id: userId })
