@@ -28,6 +28,26 @@ GET /api/materials?keyword=&category=
 
 `access_level` 取值：`basic`（基础级，直接借）/ `advanced`（进阶级，首次借用需安全确认）/ `professional`（专业级，需教师审批）。
 
+## 1.1 录入新物料（管理端）
+
+```
+POST /api/materials
+入参: { "name": "SG90 舵机", "category": "传感器", "model": "SG90 9g",
+        "location": "201室 C柜", "total_quantity": 2, "access_level": "basic",
+        "description": "9g 微型舵机，小项目云台/机械臂用。" }
+返回: { "code": 0, "msg": "ok",
+       "data": { "material_id": "S-010", "name": "SG90 舵机", "model": "SG90 9g",
+                 "category": "传感器", "access_level": "basic",
+                 "total_quantity": 2, "available_quantity": 2, "location": "201室 C柜",
+                 "description": "...", "knowledge_cards": [], "tips_count": 0 } }
+```
+
+说明：
+- 仅 `name` / `category` 必填，其余字段带默认值（`location` 默认 `"201室"`、`total_quantity` 默认 1、`access_level` 默认 `basic`）。
+- `material_id` 自动生成：分类前缀映射 开发板=A、传感器=S、驱动模块=M、工具=T、耗材=H、设备=E，取该前缀现有最大序号 +1，三位数字（如 A-026）；该前缀尚无物料时从 001 起。
+- `total_quantity` 范围 1~99（超出自动截断），`available_quantity = total_quantity`。
+- `name` 与现有物料重复 / `category` 不在映射内 → `code: 1007`（`msg` 区分：分类非法 / 名称重复）。
+
 ## 2. 物料详情
 
 ```
@@ -81,6 +101,25 @@ POST /api/borrow/review
 ```
 
 说明：仅对 `status=pending` 的记录有效，其他状态 → `code: 1004`。通过：记录转 `active`、按记录上的 `quantity` 扣库存（不足则 `code: 1001`），**借期自审核通过时刻起算**（天数 = 申请时的 days），并补推知识卡片；驳回：`status=rejected, review_status=rejected`，不扣库存。演示时不做管理端 UI，用 `/docs` 页面调用。
+
+## 3.2 批量借出（管理端代借）
+
+```
+POST /api/borrow/batch
+入参: { "user_id": "2024001",
+        "items": [ { "material_id": "A-017", "quantity": 1 } ],
+        "days": 30, "reason": "" }
+返回: { "code": 0, "msg": "ok",
+       "data": { "results": [ { "material_id": "A-017", "name": "Arduino Uno 开发板",
+                                "code": 0, "msg": "借用成功", "record_id": "R-1024" } ] } }
+```
+
+说明：
+- 逐件走第 3 节 `POST /api/borrow` 同一状态机（同一用户、同一 `days`/`reason`），`results` 每项如实返回 `code`/`msg`（成功带 `record_id`），**部分失败不影响其他件**。
+- 管理员代借视同已当面告知安全要点：`safety_confirmed` 按 `true` 处理，**1002 不再出现**；专业级仍按 1003 拦截。
+- `days` 统一作用于所有件，`>30` 时 `reason` 必填：为空 → 整批 `code: 1006`，**不产生任何记录**；填了则每件各建一条 `pending` 申请（不扣库存、不算借用中），审核见第 3.1 节。
+- `quantity` 默认 1，范围 1~10（超出自动截断）；该件缺少 `material_id` → 该件 `code: 400`。
+- 用户不存在 → 整批 `code: 404`。
 
 ## 4. 归还
 
@@ -237,5 +276,6 @@ GET /api/cards/{card_id}
 | 1004 | 记录不存在或当前状态不允许该操作 |
 | 1005 | 你已借出该物料（重复借用；含审核中的申请） |
 | 1006 | 借用超过 30 天需填写申请理由（`days > 30` 且 `reason` 为空） |
+| 1007 | 物料录入参数非法（分类不在映射 / 名称已存在） |
 
 > 当前状态：全部接口为真实实现。1002 / 1003 权限拦截已生效（阶段 3）；超期借用分级审核（1006 + 第 3.1 节）已生效；智能体对话见第 10 节。

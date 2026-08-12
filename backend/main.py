@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status
-from services import ask_core, borrow_core, experience_core, recommend_bom_core, return_core, review_borrow_core
+from services import ask_core, batch_borrow_core, borrow_core, create_material_core, experience_core, recommend_bom_core, return_core, review_borrow_core
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
@@ -37,6 +37,28 @@ class BorrowReq(BaseModel):
 class ReviewReq(BaseModel):
     record_id: str
     approve: bool  # true 通过借出 / false 驳回
+
+
+class BatchBorrowItem(BaseModel):
+    material_id: str | None = None  # 缺该字段时该件返回 code 400
+    quantity: int = 1  # 借几件，范围 1~10
+
+
+class BatchBorrowReq(BaseModel):
+    user_id: str
+    items: list[BatchBorrowItem]
+    days: int = 30  # 统一借期，>30 需 reason 并转人工审核（API.md 第 3.2 节）
+    reason: str = ""
+
+
+class MaterialCreateReq(BaseModel):
+    name: str
+    category: str
+    model: str = ""
+    location: str = "201室"
+    total_quantity: int = 1
+    access_level: str = "basic"  # basic/advanced/professional
+    description: str = ""
 
 
 class ReturnReq(BaseModel):
@@ -143,6 +165,13 @@ def list_materials(keyword: str = "", category: str = "", db: Session = Depends(
     return ok("ok", [material_dict(m) for m in q.all()])
 
 
+@app.post("/api/materials")
+def create_material(req: MaterialCreateReq, db: Session = Depends(get_db)):
+    """录入新物料（管理端）。编号自动生成，分类非法/名称重复 → 1007（API.md 第 1.1 节）。"""
+    return create_material_core(db, req.name, req.category, req.model, req.location,
+                                req.total_quantity, req.access_level, req.description)
+
+
 @app.get("/api/materials/{material_id}")
 def get_material(material_id: str, db: Session = Depends(get_db)):
     """物料详情：基础信息 + 知识卡片摘要 + 社区经验条数。"""
@@ -190,8 +219,14 @@ def borrow(req: BorrowReq, db: Session = Depends(get_db)):
 
 @app.post("/api/borrow/review")
 def review_borrow(req: ReviewReq, db: Session = Depends(get_db)):
-    """超期借用审核（管理端，演示用 /docs 调用）：通过则借出并扣库存，驳回转 rejected。"""
+    """超期借用审核（管理端）：通过则借出并扣库存，驳回转 rejected。"""
     return review_borrow_core(db, req.record_id, req.approve)
+
+
+@app.post("/api/borrow/batch")
+def batch_borrow(req: BatchBorrowReq, db: Session = Depends(get_db)):
+    """批量借出（管理端代借）：逐件走 borrow_core 同一状态机，代借视同已确认安全要点。"""
+    return batch_borrow_core(db, req.user_id, [it.model_dump() for it in req.items], req.days, req.reason)
 
 
 @app.post("/api/return")

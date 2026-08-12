@@ -212,6 +212,46 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
     })
 
 
+def batch_borrow_core(db: Session, user_id: str, items: list[dict], days: int = DEFAULT_BORROW_DAYS,
+                      reason: str = "") -> dict:
+    """批量借出（管理端代借，API.md 第 3.2 节）。
+
+    先统一校验（用户存在 / days 截断 / days>30 无 reason → 整批 1006，不产生任何记录）；
+    然后逐件调 borrow_core，管理员代借视同已当面告知安全要点（safety_confirmed=True），
+    部分失败不影响其他件，results 每项如实返回 code/msg（成功带 record_id）。
+    """
+    if db.get(User, user_id) is None:
+        return _resp(404, f"用户 {user_id} 不存在")
+    days = max(1, min(int(days or DEFAULT_BORROW_DAYS), MAX_BORROW_DAYS))
+    if days > REVIEW_THRESHOLD_DAYS and not (reason or "").strip():
+        return _resp(1006, f"借用超过 {REVIEW_THRESHOLD_DAYS} 天需填写申请理由")
+    results = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            results.append({"material_id": None, "name": "", "code": 400, "msg": "条目格式不正确", "record_id": None})
+            continue
+        material_id = str(it.get("material_id") or "").strip()
+        if not material_id:
+            results.append({"material_id": None, "name": "", "code": 400, "msg": "该条缺少 material_id", "record_id": None})
+            continue
+        try:
+            quantity = max(1, min(int(it.get("quantity") or 1), 10))
+        except (TypeError, ValueError):
+            quantity = 1
+        m = db.get(Material, material_id)
+        r = borrow_core(db, user_id, material_id, safety_confirmed=True,
+                        days=days, reason=reason, quantity=quantity)
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        results.append({
+            "material_id": material_id,
+            "name": m.name if m else material_id,
+            "code": r["code"],
+            "msg": r["msg"],
+            "record_id": data.get("record_id"),
+        })
+    return _resp(0, "ok", {"results": results})
+
+
 def review_borrow_core(db: Session, record_id: str, approve: bool) -> dict:
     """超期借用审核（管理端，演示用 /docs 调用）。
 
@@ -271,6 +311,58 @@ def return_core(db: Session, record_id: str) -> dict:
         "status": "returned",
         "returned_at": r.returned_at.isoformat(),
         "experience_draft": experience_draft_core(db, r),
+    })
+
+
+# ---------- 物料录入（管理端，API.md 第 1.1 节） ----------
+
+# 分类 → 编号前缀映射（编号 = 前缀 + 该前缀现有最大序号 + 1，三位数字）
+CATEGORY_PREFIX = {"开发板": "A", "传感器": "S", "驱动模块": "M", "工具": "T", "耗材": "H", "设备": "E"}
+
+
+def create_material_core(db: Session, name: str, category: str, model: str = "", location: str = "201室",
+                         total_quantity: int = 1, access_level: str = "basic", description: str = "") -> dict:
+    """录入新物料（管理端）：分类前缀映射 + 名称去重 + 自动生成编号。
+
+    分类不在映射内 / 名称与现有物料重复 → 1007（msg 区分两类原因）。
+    """
+    name = (name or "").strip()
+    category = (category or "").strip()
+    if not name or not category:
+        return _resp(1007, "名称和分类不能为空")
+    prefix = CATEGORY_PREFIX.get(category)
+    if prefix is None:
+        return _resp(1007, f"分类非法：{category}（可选：开发板/传感器/驱动模块/工具/耗材/设备）")
+    exists = db.query(Material).filter(Material.name == name).first()
+    if exists is not None:
+        return _resp(1007, f"名称已存在：{name}（编号 {exists.id}）")
+    try:
+        total_quantity = max(1, min(int(total_quantity or 1), 99))
+    except (TypeError, ValueError):
+        total_quantity = 1
+    if access_level not in ("basic", "advanced", "professional"):
+        access_level = "basic"
+    # 取该前缀现有最大序号（容忍编号后两位不是纯数字的脏数据，跳过不计）
+    max_seq = 0
+    for m in db.query(Material).filter(Material.id.like(f"{prefix}-%")).all():
+        tail = m.id.split("-")[-1]
+        if tail.isdigit():
+            max_seq = max(max_seq, int(tail))
+    new_id = f"{prefix}-{max_seq + 1:03d}"
+    now = datetime.now()
+    m = Material(
+        id=new_id, name=name, category=category, model=(model or "").strip(),
+        location=(location or "201室").strip(), total_quantity=total_quantity,
+        available_quantity=total_quantity, access_level=access_level,
+        description=(description or "").strip(), created_at=now, updated_at=now,
+    )
+    db.add(m)
+    db.commit()
+    return _resp(0, "ok", {
+        "material_id": m.id, "name": m.name, "model": m.model, "category": m.category,
+        "access_level": m.access_level, "total_quantity": m.total_quantity,
+        "available_quantity": m.available_quantity, "location": m.location,
+        "description": m.description, "knowledge_cards": [], "tips_count": 0,
     })
 
 
