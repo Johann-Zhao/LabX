@@ -19,11 +19,11 @@ BASE_URL = os.getenv("LABX_API_BASE", "https://api.deepseek.com/v1")
 MODEL = os.getenv("LABX_MODEL", "deepseek-v4-flash")
 MOCK = os.getenv("LABX_LLM_MOCK", "false").strip().lower() == "true"
 
-# 断网/无 key 时的兜底回答（对应最高频演示问题：DHT22 读数为 0）
+# 断网/无 key 时的兜底回答（通用排查建议，不绑定具体物料）
 MOCK_ANSWER = (
-    "（离线兜底回答）最常见的原因是数据脚没接上拉电阻。请检查："
-    "1) DATA 脚接 4.7kΩ 上拉电阻到 VCC；2) 用示例代码自检；"
-    "3) 确认供电 3.3-5V、两次读取间隔大于 2 秒。"
+    "（离线兜底回答）AI 服务暂时不可用。通用建议："
+    "1) 先断电重启，排除偶发死机；2) 检查供电与接线（八成的问题出在这）；"
+    "3) 打开对应物料的详情页，按「三分钟上手」和「常见错误」卡片逐项核对。"
 )
 
 

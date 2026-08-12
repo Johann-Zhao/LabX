@@ -30,7 +30,7 @@ INTENT_LABELS = {
 _INTENT_KEYWORDS = {
     "troubleshoot": ["不转", "没反应", "不工作", "坏了", "故障", "不亮", "读数", "报错", "排查", "发烫", "烧"],
     "explore": ["怎么用", "能做什么", "如何上手", "不知道该怎么用", "不知道咋用", "能用来", "玩法", "上手"],
-    "recommend": ["想做", "做一个", "推荐", "清单", "需要哪些", "需要什么物料", "方案"],
+    "recommend": ["想做", "做一个", "想造", "想搞", "做个", "推荐", "清单", "需要哪些", "需要什么物料", "方案"],
     "inventory": ["还有吗", "有吗", "库存", "在哪", "放在", "能借吗", "有没有"],
 }
 
@@ -42,25 +42,41 @@ _ESCAPE_OPTION = "不用问了，直接回答"  # 逃生项：用户有权跳过
 _OTHER_PHENOMENON_OPTION = "其他"  # 现象候选项兜底：只表示"不在列表里"，不等于现象已知
 
 
-def classify_intent(message: str) -> str:
-    """LLM 意图分类，输出受限 JSON；失败时退回关键词规则。"""
+# 泛称词：不是具体物料，提取结果命中这些时视为未提取（"我的电机不转" ≠ 已告知物料）
+_GENERIC_MENTIONS = {"电机", "板子", "开发板", "传感器", "模块", "物料", "东西", "套件", "套装", "设备", "工具"}
+
+
+def classify_intent(message: str) -> tuple[str, str | None]:
+    """LLM 意图分类 + 具体物料提取，返回 (intent, material_mention)。
+
+    material_mention：消息中明确提到的具体物料名称/型号（RV1126B、SG90 舵机、42 步进电机）；
+    泛称（电机/板子/传感器）或没提 → None。LLM 失败时退回关键词规则（无提取）。
+    """
     raw = llm.chat(
         "你是意图分类器。把学生的消息分为五类之一：troubleshoot（设备/物料出故障求排查）、"
         "explore（手里有物料但不知道怎么用/能做什么/求上手指导）、"
-        "recommend（描述项目想法求物料方案）、inventory（问某物料有没有/在哪/库存）、chitchat（其他）。"
-        '只输出 JSON：{"intent": "troubleshoot|explore|recommend|inventory|chitchat"}',
+        "recommend（描述想做/想造的项目或东西，求物料方案，如「我想做自动浇花」「我想造一台火箭」都算）、"
+        "inventory（问某物料有没有/在哪/库存）、chitchat（打招呼、与物料/项目无关的其他问题）。"
+        "同时提取消息里明确提到的具体物料名称/型号（如 RV1126B、SG90 舵机、42 步进电机）；"
+        "只是泛称（电机/板子/传感器这类）或没提就填 null。"
+        '只输出 JSON：{"intent": "troubleshoot|explore|recommend|inventory|chitchat", "material": "名称型号或null"}',
         message,
         max_tokens=300,
         fallback=None,
     )
-    data = parse_json_loose(raw)
-    intent = (data or {}).get("intent")
+    data = parse_json_loose(raw) or {}
+    mention = data.get("material")
+    if mention:
+        mention = str(mention).strip()
+        if not mention or mention in _GENERIC_MENTIONS or len(mention) > 30:
+            mention = None
+    intent = data.get("intent")
     if intent in INTENT_LABELS:
-        return intent
+        return intent, mention
     for name, keywords in _INTENT_KEYWORDS.items():
         if any(kw in message for kw in keywords):
-            return name
-    return "chitchat"
+            return name, mention
+    return "chitchat", mention
 
 
 # ---------- 物料定位 ----------
@@ -196,7 +212,13 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
             f"学生问题：{question}\n借用上下文：{names}\n{spare_text}\n知识片段：\n{context}",
         )
         refs = [{"card_id": h["card_id"], "title": h["title"], "url": None} for h in hits]
-        return (raw or llm.MOCK_ANSWER, refs, "local_kb" if raw else "offline")
+        if raw:
+            return raw, refs, "local_kb"
+        # 本地命中但 LLM 不可用：直接摘录卡片要点（比通用兜底有用得多）
+        excerpt = "（离线模式：AI 暂时不可用，以下摘录自本地资料）\n" + "\n".join(
+            f"《{h['title']}》{h['text'][:120]}…" for h in hits[:2]
+        )
+        return excerpt, refs, "offline"
 
     # 2. 联网检索（优先 DeepSeek 原生 web_search，失败退回 DuckDuckGo；均要求优先官方资料）
     on_status("本地未收录，正在联网检索（官方资料优先）…")
@@ -223,7 +245,13 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
             f"学生问题：{question}\n网络资料摘要：\n{snippets}",
         )
         refs = [{"card_id": None, "title": r["title"], "url": r["url"]} for r in results]
-        return (raw or llm.MOCK_ANSWER, refs, "web" if raw else "offline")
+        if raw:
+            return raw, refs, "web"
+        # 检索到资料但 LLM 不可用：摘录资料摘要
+        excerpt = "（离线模式：AI 暂时不可用，以下摘录自网络资料）\n" + "\n".join(
+            f"· {r['title']}：{r['snippet'][:100]}" for r in results
+        )
+        return excerpt, refs, "offline"
     steps.append({"step": "联网检索失败", "detail": "退回通用经验回答"})
 
     # 3. 通用经验
@@ -257,7 +285,8 @@ def _clarify(state: dict, intent: str, message: str, slots: dict, awaiting: str,
 
 
 def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
-                  allow_clarify: bool, slots: dict | None = None, on_status=None) -> dict:
+                  allow_clarify: bool, slots: dict | None = None,
+                  mention: str | None = None, on_status=None) -> dict:
     """排障分支：槽位（物料/现象）逐轮澄清，问清为止 → 阶梯回答。"""
     on_status = on_status or _noop_status
     stats = get_user_stats_core(db, user_id)
@@ -272,6 +301,9 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
         target, score, from_borrows = _find_target_material(db, active, message)
         if target is not None and (from_borrows or score >= 2):
             slots["material_id"] = target.id
+        elif mention:
+            # 消息里已带具体型号且目录无此物料 → 直接按自带物料处理，不再问"是哪个物料"
+            slots["custom_material"] = mention
         elif target is not None:
             slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
         if _has_concrete_phenomenon(message):
@@ -326,7 +358,8 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
 
 
 def _explore(db, user_id: str, message: str, steps: list, state: dict,
-             allow_clarify: bool, slots: dict | None = None, on_status=None) -> dict:
+             allow_clarify: bool, slots: dict | None = None,
+             mention: str | None = None, on_status=None) -> dict:
     """物料求用法分支：槽位只要"物料"（不要现象——物料没坏，只是不知道能做什么/怎么上手）。
 
     目录内物料：本地 → 联网阶梯（explore 格式）；自带物料：跳过本地直连联网，
@@ -344,6 +377,9 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
         target, score, from_borrows = _find_target_material(db, active, message)
         if target is not None and (from_borrows or score >= 2):
             slots["material_id"] = target.id
+        elif mention:
+            # 消息里已带具体型号且目录无此物料 → 直接按自带物料处理，不再问"是哪个物料"
+            slots["custom_material"] = mention
         elif target is not None:
             slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
 
@@ -377,8 +413,32 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
                      "如果某些用法需要搭配其他物料，优先提实验室现有的（确实配套才提，用目录里的准确名字）。")
         search_query = f"{slots['custom_material']} 开发板 入门教程 应用场景"
     else:
-        steps.append({"step": "定位物料", "detail": "未定位到具体物料，按通用介绍回答"})
-        search_query = f"{message} 入门教程 应用场景"
+        # 逃生项但没定位到物料：不做开放检索（会随机命中某件物料的卡片，答非所问）
+        if active:
+            steps.append({"step": "定位物料", "detail": "没指明是哪件，按你借用的物料逐个简介"})
+            on_status("正在整理你借用物料的用法…")
+            notes = []
+            for b in active:
+                m = db.get(Material, b["material_id"])
+                if m:
+                    notes.append(f"{m.name}：{m.description or m.category}")
+            raw = _gen(
+                "你是高校创新空间的项目导师。学生手里有物料但没说清是哪件。根据他当前借用的物料清单，"
+                "逐个用一两句话说清它能做什么、怎么上手，最后提示：说出具体是哪一件可以再细讲。200 字以内。",
+                f"学生问题：{message}\n他当前借用：\n" + "\n".join(notes),
+            )
+        else:
+            steps.append({"step": "定位物料", "detail": "没指明是哪件，按通用介绍回答"})
+            raw = _gen(
+                "你是高校创新空间的项目导师。学生手里有物料但没说是什么。通用介绍常见科创物料"
+                "（单片机开发板/传感器/驱动模块）各自能做什么、怎么上手，并引导他说出具体名称型号。200 字以内。",
+                f"学生问题：{message}",
+            )
+        return _resp(0, "ok", {
+            "intent": "explore", "steps": steps,
+            "answer": raw or llm.MOCK_ANSWER, "references": [],
+            "provenance": "model" if raw else "offline", "clarify": None,
+        })
 
     answer, refs, provenance = _ladder_answer(
         question, target, "", names, steps,
@@ -396,9 +456,34 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
     })
 
 
+# 通用问答的回答格式（不要排障报告格式）
+_CHITCHAT_ROLE = "你是高校创新空间的助教，回答学生的通用问题，直接、简短，200 字以内。"
+_CHITCHAT_FORMAT = "输出格式：先用一句话直接回答问题，再给 2-4 条要点或建议（不要①最可能原因②排查清单的排障报告格式）。\n"
+
+# 纯打招呼：直接回应，不走检索阶梯（"你好"也联网搜索又慢又怪）
+_GREETINGS = ("你好", "您好", "在吗", "在么", "hi", "hello", "嗨", "谢谢", "早上好", "下午好", "晚上好", "你是谁")
+_GREETING_ANSWER = (
+    "你好呀！我是 LabX 智能助手。可以跟我说这几类事："
+    "①想做项目（如「我想做自动浇花装置」）→ 我出全链路方案并一键预约物料；"
+    "②物料出故障（如「我的电机不转」）→ 我逐步排查；"
+    "③手里有物料不知道怎么用（如「这块板子能做什么」）→ 我讲用法；"
+    "④查库存（如「Arduino 还有吗」）。"
+)
+
+
 def _chitchat(db, message: str, steps: list, on_status=None) -> dict:
-    """开放式问答：无槽位检查，直接走回答阶梯。"""
-    answer, refs, provenance = _ladder_answer(message, None, "", "", steps, on_status=on_status)
+    """开放式问答：无槽位检查；纯打招呼直接回应，否则走回答阶梯（通用问答格式）。"""
+    text = message.strip().lower()
+    if len(message.strip()) <= 10 and any(g in text for g in _GREETINGS):
+        steps.append({"step": "闲聊", "detail": "打招呼，直接回应（不检索）"})
+        return _resp(0, "ok", {
+            "intent": "chitchat", "steps": steps,
+            "answer": _GREETING_ANSWER, "references": [], "provenance": None, "clarify": None,
+        })
+    answer, refs, provenance = _ladder_answer(
+        message, None, "", "", steps,
+        role=_CHITCHAT_ROLE, answer_format=_CHITCHAT_FORMAT, on_status=on_status,
+    )
     return _resp(0, "ok", {
         "intent": "chitchat", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
@@ -435,10 +520,8 @@ def _recommend(db, user_id: str, message: str, steps: list, on_status=None) -> d
 
 
 def _inventory(db, message: str, steps: list) -> dict:
-    found = [
-        m for m in db.query(Material).all()
-        if m.name in message or (m.model and m.model.split()[0] in message) or m.category in message
-    ]
+    # 用特征二元组评分（"Arduino 还有吗" 能命中 "Arduino Uno 开发板"），全名包含/型号词也已含在评分里
+    found = [m for m in db.query(Material).all() if score_material(m, message) >= 2]
     if found:
         steps.append({"step": "查询库存", "detail": "、".join(m.name for m in found)})
         text = "\n".join(
@@ -456,18 +539,21 @@ def _inventory(db, message: str, steps: list) -> dict:
 # ---------- 编排入口 ----------
 
 def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool,
-              forced_intent: str | None, slots: dict | None = None, on_status=None) -> dict:
+              forced_intent: str | None, slots: dict | None = None,
+              mention: str | None = None, on_status=None) -> dict:
     on_status = on_status or _noop_status
     if forced_intent:
         intent = forced_intent  # 澄清重入：意图已知，不再识别
     else:
         on_status("正在识别意图…")
-        intent = classify_intent(message)
+        intent, mention = classify_intent(message)
     steps.insert(0, {"step": "意图识别", "detail": f"识别为「{INTENT_LABELS[intent]}」"})
     if intent == "troubleshoot":
-        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, slots, on_status=on_status)
+        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, slots,
+                             mention=mention, on_status=on_status)
     if intent == "explore":
-        return _explore(db, user_id, message, steps, state, allow_clarify, slots, on_status=on_status)
+        return _explore(db, user_id, message, steps, state, allow_clarify, slots,
+                        mention=mention, on_status=on_status)
     if intent == "recommend":
         return _recommend(db, user_id, message, steps, on_status=on_status)
     if intent == "inventory":
