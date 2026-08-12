@@ -79,13 +79,14 @@ cd frontend && npm run dev        # http://localhost:5173，/api 由 vite proxy 
 - [x] 管理员页面 `/admin`：待审核（角标计数，通过/驳回超期申请，驳回二次确认）、借用中（物料当前持有人一览表）、全部流水（五态卡片：借用人/借出/应还/实还）；流水接口记录加 `user_name` 字段（commits `c67c65e`/`bb0752c` 起）
 - [x] explore 意图 + 过程显化：新增"物料求用法"意图（有物料不知怎么用→只问物料不问现象，①它是什么②能做什么③上手第一步④深入学习入口，自带物料联网检索+配套建议优先提实验室目录件）；`/api/agent/chat/stream` 流式推送真实执行状态，前端待定气泡逐行显化+跳动圆点动画（commits `9deb1d6` 起）
 - [x] 管理端独立管理台 `/admin`：与学生端分离的左右布局（左侧功能栏：审核申请/当前在借/全部流水/批量借出/录入物料，右侧内容区）；批量借出（选学生+勾选多件+数量，一次借出，逐件结果）；录入物料（分类前缀自动编号，名称去重）；新增 `/api/borrow/batch`、`/api/materials` 接口（commits `994dc49` 起）
+- [x] UI/UX 重构（学生端）：设计规范 `docs/design/labx-ui.md` + 令牌 `tokens.css` + Element 主题覆盖（蒸馏自 GitHub 高星 skill：Leonxlnx/taste-skill 75.6k★、pbakaus/impeccable 58.4k★）；开屏深色介绍动画（`IntroOverlay.vue`，canvas 粒子星座 + Seedream 四幕视觉，仅首次播放可跳过 localStorage 标记，图片缺失优雅降级，prefers-reduced-motion 降级）；智能助手升为首页 `/`（物料移到 `/materials`，`/ask` 重定向，空状态常用提问 chips，宽屏 ≥1024px 右侧快捷栏：用户卡/在借件数/快捷入口，麦克风占位按钮）；物料列表/详情/借用弹窗/记录/结果/卡片页令牌化重做 + `MaterialImage.vue` 挂图（`/images/materials/{id}.png`，破图降级占位块）；管理端 63 处写死值令牌化。桌面宽屏+375px 手机双档 Playwright 全流程走查通过（intro/对话/BOM预约/安全确认/归还心得/超期审核/批量借出/录入物料）（commits `14faa67`/`99b119f`/`0933b16`/`a737f97`/`7216245` 起）
 - [ ] 阶段 4：演示数据灌满 + 全流程测试 + 部署固化 + 录视频 ← **当前在这里**
 
 **阶段 4 待办细节**（做完划掉）：
-1. 物料照片：用 Seedream 批量生成 11 张物料图（prompt 教训：不写"45度俯拍"等数字角度、加"无文字无水印"），存 `deta/images/`，物料表/前端挂图
+1. ~~物料照片：Seedream 批量生成~~ ✅ 已完成（15 张物料图 + 4 张开屏视觉，存 `deta/images/` 并拷 `frontend/public/`，前端已挂图；生成脚本 `backend/scripts/seedream_gen.py`/`seedream_batch.py`，教训：请求体必须加 `output_format:"png"` 否则默认返回 JPEG）
 2. 3 个往期项目（含 BOM、心得、照片）+ 5 条预置社区经验（写进 deta/，init_db 灌入）
 3. 故障博物馆：烧坏的 Arduino 实物 + 手写"死因卡"（线下道具，队长/队员准备）
 4. 全流程测试 checklist（存 `deta/checklist.md`）真机走三遍：借还、问答、BOM、排障、归还、换账号
 5. 部署固化：一台笔记本跑全部服务 + 启动脚本；断网演示预案（`LABX_LLM_MOCK=true`）
 6. 录制完整演示视频（防现场翻车）+ 5 分钟剧本排练
-7. 前端美化（队长指示：先不急，功能稳定后再做）：大屏适配、动效
+7. ~~前端美化~~ ✅ 已由"UI/UX 重构"完成（设计系统、大屏双栏适配、开屏动效、消息动效）；语音输入留到后续（输入栏已留麦克风占位按钮）
