@@ -193,7 +193,20 @@ POST /api/agent/chat
                  "bom": null } }
 ```
 
-说明：`intent` 取值 `troubleshoot`（排障）/ `recommend`（求推荐，此时 `bom` 字段为第 7 节的 BOM 结构化数据；`feasible=false` 时 `bom` 为 `null`，`answer` 为幽默回应+替代建议）/ `inventory`（查库存）/ `chitchat`（走通用 RAG 问答）。`steps` 是编排引擎的中间调用过程，前端用于展示"多能力协作"。
+说明：`intent` 取值 `troubleshoot`（排障）/ `explore`（物料求用法：手里有物料不知道怎么用/能做什么，槽位只有物料，回答格式为"①它是什么 ②能做什么 ③上手第一步 ④深入学习入口"，目录内物料可借时回答末尾附"可借 N 件，在 {location}"引导）/ `recommend`（求推荐，此时 `bom` 字段为第 7 节的 BOM 结构化数据；`feasible=false` 时 `bom` 为 `null`，`answer` 为幽默回应+替代建议）/ `inventory`（查库存）/ `chitchat`（走通用 RAG 问答）。`steps` 是编排引擎的中间调用过程，前端用于展示"多能力协作"。
+
+## 10.1 智能体对话（流式，过程显化）
+
+```
+POST /api/agent/chat/stream
+入参: 同 /api/agent/chat（{ "user_id": "2024001", "message": "...", "conv_id": "..." }）
+返回: StreamingResponse，media_type = application/x-ndjson，每行一个 JSON 事件：
+  { "type": "status", "text": "正在识别意图…" }   ← 真实执行动作前的过程状态（做了什么才发什么）
+  { "type": "final",  "data": { …与 /api/agent/chat 的 data 完全相同… } }
+  { "type": "error",  "msg": "..." }               ← 编排异常（同时终止流）
+```
+
+说明：供前端"过程显化"区逐行展示执行过程（正在识别意图 → 确认借用清单 → 检索本地知识库/联网检索 → 生成回答），收到 `final` 后按第 10 节同样的 `data` 结构渲染回答/steps/provenance/BOM；澄清响应很快，不额外发过程状态。原 `/api/agent/chat` 保持不变（MCP 与测试仍用），前端流式失败时回退调用它。
 
 ## 11. 知识卡片全文
 

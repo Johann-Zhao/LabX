@@ -321,6 +321,18 @@ for _w in ["模块", "传感器", "开发板", "套装", "设备", "工具", "�
     GENERIC_BIGRAMS |= bigrams(_w)
 
 
+def _is_salient_bigram(g: str) -> bool:
+    """特征二元组过滤：含空格/符号的碎片（" R"、"B "、"-S"）和纯数字（"16"）没有区分度，不算特征。
+
+    保留：含中文的（"电机"、"循迹"）或字母数字组合（"R3"、"4B"、"5V"）。
+    """
+    if any(c.isspace() for c in g):
+        return False
+    if any("一" <= c <= "鿿" for c in g):
+        return True
+    return g.isalnum() and not g.isdigit()
+
+
 def score_material(m: Material, message: str) -> int:
     """消息与物料的相关度：全名 > 型号 > 特征二元组。"""
     score = 0
@@ -329,7 +341,8 @@ def score_material(m: Material, message: str) -> int:
     model_token = (m.model or "").split()[0] if m.model else ""
     if model_token and model_token.lower() in message.lower():
         score += 5
-    salient = (bigrams(m.name) | bigrams(m.model or "")) - GENERIC_BIGRAMS
+    salient = {g for g in (bigrams(m.name) | bigrams(m.model or "")) - GENERIC_BIGRAMS
+               if _is_salient_bigram(g)}
     score += sum(1 for g in salient if g in message)
     return score
 

@@ -20,6 +20,7 @@ from websearch import web_search
 
 INTENT_LABELS = {
     "troubleshoot": "故障排查",
+    "explore": "物料求用法",
     "recommend": "项目求推荐",
     "inventory": "查库存",
     "chitchat": "闲聊/其他",
@@ -28,6 +29,7 @@ INTENT_LABELS = {
 # 关键词兜底规则：LLM 意图识别失败时使用（断网演示也能分流）
 _INTENT_KEYWORDS = {
     "troubleshoot": ["不转", "没反应", "不工作", "坏了", "故障", "不亮", "读数", "报错", "排查", "发烫", "烧"],
+    "explore": ["怎么用", "能做什么", "如何上手", "不知道该怎么用", "不知道咋用", "能用来", "玩法", "上手"],
     "recommend": ["想做", "做一个", "推荐", "清单", "需要哪些", "需要什么物料", "方案"],
     "inventory": ["还有吗", "有吗", "库存", "在哪", "放在", "能借吗", "有没有"],
 }
@@ -43,9 +45,10 @@ _OTHER_PHENOMENON_OPTION = "其他"  # 现象候选项兜底：只表示"不在�
 def classify_intent(message: str) -> str:
     """LLM 意图分类，输出受限 JSON；失败时退回关键词规则。"""
     raw = llm.chat(
-        "你是意图分类器。把学生的消息分为四类之一：troubleshoot（设备/物料出故障求排查）、"
+        "你是意图分类器。把学生的消息分为五类之一：troubleshoot（设备/物料出故障求排查）、"
+        "explore（手里有物料但不知道怎么用/能做什么/求上手指导）、"
         "recommend（描述项目想法求物料方案）、inventory（问某物料有没有/在哪/库存）、chitchat（其他）。"
-        '只输出 JSON：{"intent": "troubleshoot|recommend|inventory|chitchat"}',
+        '只输出 JSON：{"intent": "troubleshoot|explore|recommend|inventory|chitchat"}',
         message,
         max_tokens=300,
         fallback=None,
@@ -135,20 +138,46 @@ _ANSWER_FORMAT = (
     "③补充路径（备件位置/深入学习入口，没有可省略）\n"
 )
 
+# explore（物料求用法）专用：导师角色 + 求用法回答格式（见 docs/agent-workflow.md）
+_EXPLORE_ROLE = (
+    "你是高校创新空间的项目导师，学生手里有一件物料但不知道怎么用，"
+    "根据给定资料回答，语气直接、可操作，250 字以内。"
+)
+_EXPLORE_FORMAT = (
+    "输出格式（严格遵守，本地与联网回答格式一致）：\n"
+    "①它是什么（一句话定位：核心能力/关键参数）\n"
+    "②能做什么（2-4 个适合学生科创的用法/项目点子，每点一句话）\n"
+    "③上手第一步（具体到操作：上电/接线/烧录/跑通哪个示例）\n"
+    "④深入学习入口（官方文档/教程名称或网址）\n"
+)
+
+
+def _noop_status(text: str) -> None:
+    """on_status 的默认实现：不做事（非流式调用无需任何改动）。"""
+
 
 def _ladder_answer(question: str, target, spare_text: str, names: str, steps: list,
-                   custom_material: str | None = None) -> tuple[str, list, str]:
+                   custom_material: str | None = None, role: str | None = None,
+                   answer_format: str | None = None, search_query: str | None = None,
+                   on_status=None) -> tuple[str, list, str]:
     """返回 (answer, references, provenance)。流程见 docs/agent-workflow.md：
 
     本地只在"强相关"（型号对应 + 原因对应）时使用；自带物料跳过本地直接联网。
+    role / answer_format 可定制回答角色与输出结构（explore 用，默认排障专家）；
+    search_query 指定检索词（默认按"物料名 + 问题"自动拼，explore 用用途导向词）。
+    on_status 为可选的流式状态回调（每个真实动作前调用，诚实报告执行过程）。
     """
-    query_text = f"{target.name} {question}" if target else question
+    on_status = on_status or _noop_status
+    system_role = role or "你是高校创新空间的排障/答疑专家。只根据给定的知识片段回答，语气直接、给操作指令，250 字以内。"
+    fmt = answer_format or _ANSWER_FORMAT
+    query_text = search_query or (f"{target.name} {question}" if target else question)
 
     # 1. 本地知识库：仅当型号对应（目录内物料）。自带物料无型号对应，直接跳过
     hits = []
     if custom_material:
         steps.append({"step": "自带物料，本地无对应型号", "detail": "跳过本地，直接联网检索"})
     else:
+        on_status("正在检索本地知识库…")
         hits = rag.query(query_text, material_id=target.id if target else None, top_k=3)
         threshold = LOCAL_HIT_THRESHOLD_IN_MATERIAL if target else LOCAL_HIT_THRESHOLD_OPEN
         hits = [h for h in hits if h["score"] >= threshold]
@@ -156,30 +185,33 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
             hits = [h for h in rag.query(query_text, top_k=3) if h["score"] >= LOCAL_HIT_THRESHOLD_OPEN]
     if hits:
         # 引用卫生：只保留"与最高分同物料"或"分数接近最高分（≥60%）"的，防止无关卡片混入参考列表
+        on_status("本地命中，正在整理回答…")
         top_score = hits[0]["score"]
         top_material = hits[0].get("material_id")
         hits = [h for h in hits if h.get("material_id") == top_material or h["score"] >= top_score * 0.6]
         steps.append({"step": "本地知识库命中", "detail": "、".join(f"《{h['title']}》" for h in hits)})
         context = "\n\n".join(f"【{h['title']}】\n{h['text']}" for h in hits)
         raw = _gen(
-            "你是高校创新空间的排障/答疑专家。只根据给定的知识片段回答，"
-            "语气直接、给操作指令，250 字以内。\n" + _ANSWER_FORMAT,
+            system_role + "\n" + fmt,
             f"学生问题：{question}\n借用上下文：{names}\n{spare_text}\n知识片段：\n{context}",
         )
         refs = [{"card_id": h["card_id"], "title": h["title"], "url": None} for h in hits]
         return (raw or llm.MOCK_ANSWER, refs, "local_kb" if raw else "offline")
 
     # 2. 联网检索（优先 DeepSeek 原生 web_search，失败退回 DuckDuckGo；均要求优先官方资料）
+    on_status("本地未收录，正在联网检索（官方资料优先）…")
     raw = llm.chat_with_search(
         "你是高校创新空间的助教。基于联网搜索到的资料回答学生问题，"
-        "优先采用官方资料（厂商文档、数据手册、官方教程）的内容，250 字以内。\n" + _ANSWER_FORMAT,
+        "优先采用官方资料（厂商文档、数据手册、官方教程）的内容，250 字以内。\n" + fmt,
         f"学生问题：{question}",
+        max_tokens=3000,  # 推理链+搜索循环很烧输出预算，1024 会把正文截断
     )
     if raw:
         steps.append({"step": "本地未收录，已联网检索", "detail": "DeepSeek 原生联网搜索（官方资料优先）"})
         urls = re.findall(r"https?://[^\s\)\]>\"，。]+", raw)
         refs = [{"card_id": None, "title": u.split("/")[2] if "/" in u else u, "url": u} for u in urls[:3]]
         return raw, refs, "web"
+    on_status("正在用备用渠道检索…")
     results = web_search(query_text)
     if results:
         steps.append({"step": "本地未收录，已联网检索", "detail": f"找到 {len(results)} 条网络资料（官方域名优先）"})
@@ -187,7 +219,7 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
         raw = _gen(
             "你是高校创新空间的助教。根据联网检索到的资料摘要回答学生问题，"
             "优先采用官方资料（厂商文档、数据手册、官方教程）的内容；资料与问题不相关就凭通用知识回答。"
-            "250 字以内。\n" + _ANSWER_FORMAT,
+            "250 字以内。\n" + fmt,
             f"学生问题：{question}\n网络资料摘要：\n{snippets}",
         )
         refs = [{"card_id": None, "title": r["title"], "url": r["url"]} for r in results]
@@ -195,6 +227,7 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
     steps.append({"step": "联网检索失败", "detail": "退回通用经验回答"})
 
     # 3. 通用经验
+    on_status("联网也没找到，正在凭通用经验回答…")
     raw = _gen(
         "你是高校创新空间的助教。本地知识库和网络检索都没有这个问题的资料，"
         "请凭通用电子知识回答，开头必须声明「本地知识库未收录，以下为通用经验」。150 字以内。",
@@ -224,11 +257,13 @@ def _clarify(state: dict, intent: str, message: str, slots: dict, awaiting: str,
 
 
 def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
-                  allow_clarify: bool, slots: dict | None = None) -> dict:
+                  allow_clarify: bool, slots: dict | None = None, on_status=None) -> dict:
     """排障分支：槽位（物料/现象）逐轮澄清，问清为止 → 阶梯回答。"""
+    on_status = on_status or _noop_status
     stats = get_user_stats_core(db, user_id)
     active = stats["active_borrows"] if stats else []
     names = "、".join(b["material_name"] for b in active) or "无（当前没有借用中的物料）"
+    on_status(f"已确认你的借用清单：{names}" if active else "你当前没有借用中的物料")
     steps.append({"step": "确认借用上下文", "detail": f"你当前借用：{names}"})
 
     if slots is None:
@@ -282,23 +317,97 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
         spare_text = ""
 
     answer, refs, provenance = _ladder_answer(question, target, spare_text, names, steps,
-                                              custom_material=slots.get("custom_material"))
+                                              custom_material=slots.get("custom_material"),
+                                              on_status=on_status)
     return _resp(0, "ok", {
         "intent": "troubleshoot", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
     })
 
 
-def _chitchat(db, message: str, steps: list) -> dict:
+def _explore(db, user_id: str, message: str, steps: list, state: dict,
+             allow_clarify: bool, slots: dict | None = None, on_status=None) -> dict:
+    """物料求用法分支：槽位只要"物料"（不要现象——物料没坏，只是不知道能做什么/怎么上手）。
+
+    目录内物料：本地 → 联网阶梯（explore 格式）；自带物料：跳过本地直连联网，
+    并把实验室目录物料名列表给 LLM，要求配套建议优先提目录内的（见 docs/agent-workflow.md）。
+    """
+    on_status = on_status or _noop_status
+    stats = get_user_stats_core(db, user_id)
+    active = stats["active_borrows"] if stats else []
+    names = "、".join(b["material_name"] for b in active) or "无（当前没有借用中的物料）"
+    on_status(f"已确认你的借用清单：{names}" if active else "你当前没有借用中的物料")
+    steps.append({"step": "确认借用上下文", "detail": f"你当前借用：{names}"})
+
+    if slots is None:
+        slots = {"material_id": None, "custom_material": None, "guess_id": None}
+        target, score, from_borrows = _find_target_material(db, active, message)
+        if target is not None and (from_borrows or score >= 2):
+            slots["material_id"] = target.id
+        elif target is not None:
+            slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
+
+    if allow_clarify and not slots.get("material_id") and not slots.get("custom_material"):
+        options = [b["material_name"] for b in active]
+        guess_id = slots.get("guess_id")
+        if guess_id:
+            g = db.get(Material, guess_id)
+            if g and g.name not in options:
+                options.insert(0, f"{g.name}（猜的）")
+        options += [_SELF_OWNED_OPTION, _ESCAPE_OPTION]
+        return _clarify(state, "explore", message, slots, "material", steps, options,
+                        "想给你讲讲用法，先确认一下：是哪个物料？")
+
+    # ---- 槽位齐备（或用户选择直接回答）：组织问题并作答 ----
+    target = db.get(Material, slots["material_id"]) if slots.get("material_id") else None
+    question = message
+    if slots.get("custom_material"):
+        question += f"。用户自带物料：{slots['custom_material']}"
+
+    if target:
+        steps.append({"step": "定位物料", "detail": f"{target.name}（{target.id}）"})
+        question += (f"。物料信息：{target.name}，型号 {target.model or '未知'}。"
+                     f"{target.description or ''}".strip())
+        search_query = f"{target.name} 入门教程 应用场景"
+    elif slots.get("custom_material"):
+        steps.append({"step": "定位物料",
+                      "detail": f"用户自带物料「{slots['custom_material']}」（不在目录），按外部物料处理"})
+        catalog_names = "、".join(m.name for m in db.query(Material).all())
+        question += (f"\n实验室物料目录：{catalog_names}\n"
+                     "如果某些用法需要搭配其他物料，优先提实验室现有的（确实配套才提，用目录里的准确名字）。")
+        search_query = f"{slots['custom_material']} 开发板 入门教程 应用场景"
+    else:
+        steps.append({"step": "定位物料", "detail": "未定位到具体物料，按通用介绍回答"})
+        search_query = f"{message} 入门教程 应用场景"
+
+    answer, refs, provenance = _ladder_answer(
+        question, target, "", names, steps,
+        custom_material=slots.get("custom_material"),
+        role=_EXPLORE_ROLE, answer_format=_EXPLORE_FORMAT,
+        search_query=search_query, on_status=on_status,
+    )
+    # 目录内物料且可借：后端拼一句"可借引导"（不靠 LLM）
+    if target and target.available_quantity > 0:
+        answer += (f"\n\n这件实验室就有：可借 {target.available_quantity} 件，在 {target.location}，"
+                   "看完教程想动手直接来借。")
+    return _resp(0, "ok", {
+        "intent": "explore", "steps": steps,
+        "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
+    })
+
+
+def _chitchat(db, message: str, steps: list, on_status=None) -> dict:
     """开放式问答：无槽位检查，直接走回答阶梯。"""
-    answer, refs, provenance = _ladder_answer(message, None, "", "", steps)
+    answer, refs, provenance = _ladder_answer(message, None, "", "", steps, on_status=on_status)
     return _resp(0, "ok", {
         "intent": "chitchat", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
     })
 
 
-def _recommend(db, user_id: str, message: str, steps: list) -> dict:
+def _recommend(db, user_id: str, message: str, steps: list, on_status=None) -> dict:
+    on_status = on_status or _noop_status
+    on_status("正在生成全链路方案与物料清单…")
     res = recommend_bom_core(db, message, user_id)
     bom = res["data"]
     # 接不住的愿望（火箭/真赛车等）：幽默回应 + 替代建议，不出 BOM 卡片
@@ -347,23 +456,32 @@ def _inventory(db, message: str, steps: list) -> dict:
 # ---------- 编排入口 ----------
 
 def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool,
-              forced_intent: str | None, slots: dict | None = None) -> dict:
-    intent = forced_intent or classify_intent(message)
+              forced_intent: str | None, slots: dict | None = None, on_status=None) -> dict:
+    on_status = on_status or _noop_status
+    if forced_intent:
+        intent = forced_intent  # 澄清重入：意图已知，不再识别
+    else:
+        on_status("正在识别意图…")
+        intent = classify_intent(message)
     steps.insert(0, {"step": "意图识别", "detail": f"识别为「{INTENT_LABELS[intent]}」"})
     if intent == "troubleshoot":
-        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, slots)
+        return _troubleshoot(db, user_id, message, steps, state, allow_clarify, slots, on_status=on_status)
+    if intent == "explore":
+        return _explore(db, user_id, message, steps, state, allow_clarify, slots, on_status=on_status)
     if intent == "recommend":
-        return _recommend(db, user_id, message, steps)
+        return _recommend(db, user_id, message, steps, on_status=on_status)
     if intent == "inventory":
         return _inventory(db, message, steps)
-    return _chitchat(db, message, steps)
+    return _chitchat(db, message, steps, on_status=on_status)
 
 
-def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict:
+def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_status=None) -> dict:
     """编排入口。conv_id 标识对话（前端生成），用于澄清槽位的挂起与恢复。
 
     澄清是逐槽位多轮的：每轮只问一个缺失槽位，直到物料+现象都清楚
     （或用户点"不用问了，直接回答"）。规则见 docs/agent-workflow.md。
+    on_status 为可选的流式状态回调（str → None），每个真实执行动作前调用
+    （/api/agent/chat/stream 用它推过程状态，非流式调用传 None 即可）。
     """
     state = _CONV.setdefault(conv_id, {})
     pending = state.pop("pending", None)
@@ -376,7 +494,8 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict
         if message == _ESCAPE_OPTION:
             steps = [{"step": "用户选择直接回答", "detail": "按当前已知信息处理"}]
             return _dispatch(db, user_id, original, steps, state,
-                             allow_clarify=False, forced_intent=pending["intent"], slots=slots)
+                             allow_clarify=False, forced_intent=pending["intent"], slots=slots,
+                             on_status=on_status)
 
         steps = [{"step": "澄清补充", "detail": f"原问题「{original}」+ 补充「{message}」"}]
         if awaiting == "material":
@@ -408,5 +527,7 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default") -> dict
             slots["phenomenon"] = message
         # 槽位推进后重入流程：还有缺失槽位会继续问，齐了自然回答
         return _dispatch(db, user_id, original, steps, state,
-                         allow_clarify=True, forced_intent=pending["intent"], slots=slots)
-    return _dispatch(db, user_id, message, [], state, allow_clarify=True, forced_intent=None)
+                         allow_clarify=True, forced_intent=pending["intent"], slots=slots,
+                         on_status=on_status)
+    return _dispatch(db, user_id, message, [], state, allow_clarify=True, forced_intent=None,
+                     on_status=on_status)

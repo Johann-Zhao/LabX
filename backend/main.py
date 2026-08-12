@@ -5,9 +5,12 @@
 接口契约见仓库根目录 API.md，改动契约先在群里同步。
 """
 import json
+import queue
+import threading
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -237,6 +240,47 @@ def agent_chat_endpoint(req: AgentChatReq, db: Session = Depends(get_db)):
     """
     from orchestrator import agent_chat
     return agent_chat(db, req.user_id, req.message, req.conv_id)
+
+
+@app.post("/api/agent/chat/stream")
+def agent_chat_stream_endpoint(req: AgentChatReq):
+    """智能体对话（流式，过程显化）：NDJSON 逐行推送，见 API.md 第 10.1 节。
+
+    每行一个 JSON 事件：{"type":"status","text":...}（执行动作前的真实过程状态）/
+    {"type":"final","data":...}（与 /api/agent/chat 的 data 完全一致）/ {"type":"error","msg":...}。
+    编排跑在后台线程里，on_status 回调往队列放事件，生成器逐行 yield；
+    db session 由本端点创建，流结束后关闭（线程内使用完再关）。
+    """
+    from orchestrator import agent_chat
+
+    db = SessionLocal()
+    events: queue.Queue = queue.Queue()
+
+    def run():
+        try:
+            def on_status(text: str) -> None:
+                events.put({"type": "status", "text": text})
+
+            result = agent_chat(db, req.user_id, req.message, req.conv_id, on_status=on_status)
+            events.put({"type": "final", "data": result.get("data", result)})
+        except Exception as e:  # 编排异常：流式通道也要能报错，不能静默挂死
+            events.put({"type": "error", "msg": str(e)})
+        finally:
+            events.put({"type": "__end__"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def gen():
+        try:
+            while True:
+                ev = events.get()
+                if ev.get("type") == "__end__":
+                    break
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        finally:
+            db.close()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 # ---------- 愿望到方案与经验沉淀（核心逻辑在 services.py） ----------

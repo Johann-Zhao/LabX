@@ -37,50 +37,56 @@ def chat(system: str, user: str, max_tokens: int = 1024, fallback: str | None = 
     """
     if MOCK or not API_KEY:
         return fallback
-    try:
-        client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=timeout)
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            max_tokens=max_tokens,
-        )
-        return (resp.choices[0].message.content or "").strip() or fallback
-    except Exception:  # 网络不通、key 失效、超时等一律兜底
-        return fallback
-
+    for _attempt in range(2):  # 校园网偶发连接重置（WinError 10054），白嫖一次重试（重置 fail-fast 不耗时）
+        try:
+            client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=timeout)
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens,
+            )
+            return (resp.choices[0].message.content or "").strip() or fallback
+        except Exception:  # 网络不通、key 失效、超时等一律兜底
+            continue
+    return fallback
 
 def chat_with_search(system: str, user: str, max_tokens: int = 1024) -> str | None:
     """DeepSeek Responses API 原生联网搜索（tools=web_search，无需第三方搜索 key）。
 
     成功返回回答文本；任何失败返回 None，由调用方降级（DuckDuckGo/通用经验）。
+    v4-flash 偶发把输出预算全烧在"搜索→无结果→再搜索"循环上（status=incomplete、没有 message 项），
+    这种"无正文"结果重试一次，其余失败直接放弃。
     """
     if MOCK or not API_KEY:
         return None
     base = BASE_URL.removesuffix("/v1")  # https://api.deepseek.com
-    try:
-        resp = httpx.post(
-            f"{base}/responses",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            json={
-                "model": MODEL,
-                "instructions": system,
-                "input": user,
-                "tools": [{"type": "web_search"}],
-                "max_output_tokens": max_tokens,
-            },
-            timeout=45,
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        for item in reversed(data.get("output", [])):
-            if item.get("type") == "message":
-                for c in item.get("content", []):
-                    if c.get("type") == "output_text" and c.get("text"):
-                        return c["text"].strip()
-        return None
-    except Exception:
-        return None
+    # 重试 3 次：①200 但无正文（预算烧在搜索循环上）②校园网偶发连接重置（WinError 10054，fail-fast 不耗时）
+    for _attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"{base}/responses",
+                headers={"Authorization": f"Bearer {API_KEY}"},
+                json={
+                    "model": MODEL,
+                    "instructions": system,
+                    "input": user,
+                    "tools": [{"type": "web_search"}],
+                    "max_output_tokens": max_tokens,
+                },
+                timeout=45,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            for item in reversed(data.get("output", [])):
+                if item.get("type") == "message":
+                    for c in item.get("content", []):
+                        if c.get("type") == "output_text" and c.get("text"):
+                            return c["text"].strip()
+            # 200 但没产出正文（预算烧在搜索循环上）→ 重试一次
+        except Exception:
+            continue
+    return None
