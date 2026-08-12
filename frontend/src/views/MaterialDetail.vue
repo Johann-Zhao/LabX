@@ -26,13 +26,20 @@ const safetyNotice = ref('')
 const safetyChecked = ref(false)
 
 onMounted(async () => {
-  const res = await fetchMaterial(route.params.id)
-  loading.value = false
-  if (res.code === 0) {
-    material.value = res.data
-  } else {
-    ElMessage.error(res.msg)
+  try {
+    const res = await fetchMaterial(route.params.id)
+    if (res.code === 0) {
+      material.value = res.data
+    } else {
+      ElMessage.error(res.msg)
+      router.replace('/')
+    }
+  } catch (e) {
+    // 请求失败（网络错误/后端 5xx）：必须清掉 loading，否则页面永远转圈
+    ElMessage.error('物料详情加载失败：' + e.message)
     router.replace('/')
+  } finally {
+    loading.value = false
   }
 })
 
