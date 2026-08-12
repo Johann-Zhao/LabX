@@ -1,7 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { fetchUsers } from './api'
 import { currentUser, setUser } from './store'
+
+const route = useRoute()
+// 管理台独立布局：/admin 下不渲染学生端外壳（顶栏 + 导航 tabs），直接显示 AdminPage
+const isAdmin = computed(() => route.path.startsWith('/admin'))
 
 const users = ref([])
 
@@ -21,24 +26,26 @@ onMounted(async () => {
 </script>
 
 <template>
-  <header class="topbar">
-    <span class="logo">LabX 创新空间</span>
-    <el-select v-model="selectedUserId" size="small" class="user-switch">
-      <el-option
-        v-for="u in users"
-        :key="u.user_id"
-        :label="`${u.name}（${u.user_id}）`"
-        :value="u.user_id"
-      />
-    </el-select>
-  </header>
+  <template v-if="!isAdmin">
+    <header class="topbar">
+      <span class="logo">LabX 创新空间</span>
+      <el-select v-model="selectedUserId" size="small" class="user-switch">
+        <el-option
+          v-for="u in users"
+          :key="u.user_id"
+          :label="`${u.name}（${u.user_id}）`"
+          :value="u.user_id"
+        />
+      </el-select>
+    </header>
 
-  <nav class="tabs">
-    <router-link to="/" class="tab" exact-active-class="active">物料</router-link>
-    <router-link to="/ask" class="tab" active-class="active">智能助手</router-link>
-    <router-link to="/records" class="tab" active-class="active">我的借用</router-link>
-    <router-link to="/admin" class="tab" active-class="active">管理</router-link>
-  </nav>
+    <nav class="tabs">
+      <router-link to="/" class="tab" exact-active-class="active">物料</router-link>
+      <router-link to="/ask" class="tab" active-class="active">智能助手</router-link>
+      <router-link to="/records" class="tab" active-class="active">我的借用</router-link>
+      <router-link to="/admin" class="tab" active-class="active">管理</router-link>
+    </nav>
+  </template>
 
   <router-view />
 </template>

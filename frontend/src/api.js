@@ -38,6 +38,18 @@ export async function reviewBorrow(recordId, approve) {
   return data
 }
 
+// 批量借出（管理端代借）：逐件走同一状态机，返回 results（每项 code/msg，成功带 record_id）
+export async function batchBorrow(userId, items, days = 30, reason = '') {
+  const { data } = await http.post('/borrow/batch', { user_id: userId, items, days, reason })
+  return data
+}
+
+// 录入新物料（管理端）：编号自动生成；分类非法 / 名称重复 → 1007
+export async function createMaterial(payload) {
+  const { data } = await http.post('/materials', payload)
+  return data
+}
+
 export async function fetchRecords(userId = '') {
   const { data } = await http.get('/records', { params: { user_id: userId } })
   return data
