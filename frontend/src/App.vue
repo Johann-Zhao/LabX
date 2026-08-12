@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { fetchUsers } from './api'
 import { currentUser, setUser } from './store'
+import IntroOverlay from './components/IntroOverlay.vue'
 
 const route = useRoute()
 // 管理台独立布局：/admin 下不渲染学生端外壳（顶栏 + 导航 tabs），直接显示 AdminPage
@@ -48,6 +49,9 @@ onMounted(async () => {
   </template>
 
   <router-view />
+
+  <!-- 开屏介绍动画：仅学生端首次访问播放（/admin 永不渲染；组件内部用 localStorage 控仅首次） -->
+  <IntroOverlay v-if="!isAdmin" />
 </template>
 
 <style scoped>
