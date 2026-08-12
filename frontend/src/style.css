@@ -10,7 +10,20 @@
 
 body {
   margin: 0;
-  background: var(--lx-bg-page);
+  background-color: var(--lx-bg-page);
+  /* 蓝图网格底纹：64px 大格 + 8px 细格叠加（CSS 渐变画 1px 细线）。
+     透明度极低（见 tokens.css 的 --lx-grid-line*），只提供"工程图纸"纸面质感；
+     卡片/气泡都是不透明 --lx-bg-surface，正文区域实际读不到网格，不影响可读性。 */
+  background-image:
+    linear-gradient(var(--lx-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--lx-grid-line) 1px, transparent 1px),
+    linear-gradient(var(--lx-grid-line-fine) 1px, transparent 1px),
+    linear-gradient(90deg, var(--lx-grid-line-fine) 1px, transparent 1px);
+  background-size:
+    var(--lx-grid-size) var(--lx-grid-size),
+    var(--lx-grid-size) var(--lx-grid-size),
+    var(--lx-grid-size-fine) var(--lx-grid-size-fine),
+    var(--lx-grid-size-fine) var(--lx-grid-size-fine);
   color: var(--lx-text-primary);
   font-family: var(--lx-font-sans);
   font-size: var(--lx-text-base);
@@ -27,6 +40,42 @@ body {
 .lx-num {
   font-family: var(--lx-font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* 仪器面板角标：容器四角各一个 L 形细角线（取景框/仪器面板语言），hover 染主绿。
+   用法：容器加 class="lx-brackets"（自带 position: relative）。
+   实现：::before 铺 8 段 currentColor 渐变拼出四角，颜色走 color 才能做过渡；
+   角标浮在容器边框外侧（inset -4px），臂长/线宽见 tokens.css 的 --lx-corner-*。
+   注意：overflow: hidden 的容器不能用（角标会被裁掉）。 */
+.lx-brackets {
+  position: relative;
+}
+.lx-brackets::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  pointer-events: none;
+  color: var(--lx-border-strong);
+  background-image:
+    linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor),
+    linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor);
+  background-size:
+    var(--lx-corner-size) var(--lx-corner-w), var(--lx-corner-w) var(--lx-corner-size),
+    var(--lx-corner-size) var(--lx-corner-w), var(--lx-corner-w) var(--lx-corner-size),
+    var(--lx-corner-size) var(--lx-corner-w), var(--lx-corner-w) var(--lx-corner-size),
+    var(--lx-corner-size) var(--lx-corner-w), var(--lx-corner-w) var(--lx-corner-size);
+  background-position:
+    0 0, 0 0,
+    100% 0, 100% 0,
+    0 100%, 0 100%,
+    100% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  transition: color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.lx-brackets:hover::before {
+  color: var(--lx-green);
 }
 
 /* 响应式容器：<768px 全宽内边距 12px；≥768px 限宽 960px；≥1280px 限宽 1200px */

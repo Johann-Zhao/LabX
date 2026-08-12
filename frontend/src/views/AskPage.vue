@@ -223,7 +223,12 @@ async function scrollToBottom() {
           size="large"
           :disabled="thinking"
           @keyup.enter="send"
-        />
+        >
+          <!-- 控制台提示符：mono ›，占位文本仍是中文 -->
+          <template #prefix>
+            <span class="prompt" aria-hidden="true">›</span>
+          </template>
+        </el-input>
         <!-- 语音输入占位：功能未上线，仅保留入口位置 -->
         <el-button class="mic-btn" size="large" disabled title="语音输入即将上线" aria-label="语音输入即将上线">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -236,24 +241,29 @@ async function scrollToBottom() {
       </div>
     </div>
 
-    <!-- 右侧快捷栏：仅 ≥1024px 显示，数据失败静默降级 -->
+    <!-- 右侧快捷栏：仅 ≥1024px 显示，数据失败静默降级；容器卡挂仪器角标 -->
     <aside class="side-col">
-      <div class="side-card">
+      <div class="side-card lx-brackets">
         <div class="user-name">{{ currentUser.name }}</div>
-        <div class="user-id lx-num">{{ currentUser.id }}</div>
-        <div v-if="borrowingCount !== null" class="borrow-count">
-          在借 <span class="lx-num">{{ borrowingCount }}</span> 件
+        <div class="user-id lx-num">ID {{ currentUser.id }}</div>
+        <!-- 在借件数：仪器读数风（大号 mono 数字 + 小号单位标签） -->
+        <div v-if="borrowingCount !== null" class="readout">
+          <div class="readout-num lx-num">{{ borrowingCount }}</div>
+          <div class="readout-label lx-num">当前在借 · 件</div>
         </div>
       </div>
 
-      <div class="side-card">
+      <div class="side-card lx-brackets">
         <div class="side-title">快捷入口</div>
         <router-link to="/materials" class="side-link">去借物料</router-link>
         <router-link to="/records" class="side-link">我的借用</router-link>
       </div>
 
-      <div class="side-card">
-        <div class="side-title">常用提问</div>
+      <div class="side-card lx-brackets">
+        <div class="side-title">
+          <span>常用提问</span>
+          <span class="title-tag lx-num">QA {{ SUGGESTIONS.length }}</span>
+        </div>
         <div class="side-chips">
           <el-button
             v-for="q in SUGGESTIONS"
@@ -494,6 +504,13 @@ async function scrollToBottom() {
   padding-top: var(--lx-space-3);
   border-top: 1px solid var(--lx-border-lighter);
 }
+/* 控制台提示符 ›：mono 主绿，借用 el-input 的 prefix 槽垂直居中 */
+.prompt {
+  font-family: var(--lx-font-mono);
+  font-size: var(--lx-text-md);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-green);
+}
 .mic-btn {
   flex-shrink: 0;
 }
@@ -521,10 +538,18 @@ async function scrollToBottom() {
   padding: var(--lx-space-4);
 }
 .side-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   font-size: var(--lx-text-xs);
   font-weight: var(--lx-font-medium);
   color: var(--lx-text-secondary);
   margin-bottom: var(--lx-space-3);
+}
+/* mono 功能标签：真实计数（Linear 的 FIG/ENG 式标注），不贴假数字 */
+.title-tag {
+  letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
 }
 .user-name {
   font-size: var(--lx-text-md);
@@ -537,12 +562,23 @@ async function scrollToBottom() {
   color: var(--lx-text-secondary);
   margin-top: var(--lx-space-1);
 }
-.borrow-count {
+/* 在借件数读数：细发线之上，大号 mono 数字 + 小号 mono 单位标签 */
+.readout {
   margin-top: var(--lx-space-3);
   padding-top: var(--lx-space-3);
   border-top: 1px solid var(--lx-border-lighter);
-  font-size: var(--lx-text-sm);
-  color: var(--lx-text-regular);
+}
+.readout-num {
+  font-size: var(--lx-text-3xl);
+  font-weight: var(--lx-font-semibold);
+  line-height: var(--lx-leading-tight);
+  color: var(--lx-text-primary);
+}
+.readout-label {
+  margin-top: var(--lx-space-1);
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.08em;
+  color: var(--lx-text-secondary);
 }
 .side-link {
   display: block;

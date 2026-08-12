@@ -117,7 +117,7 @@ async function doBorrow(safetyConfirmed) {
       </div>
       <p class="desc">{{ material.description }}</p>
 
-      <dl class="facts">
+      <dl class="facts lx-brackets">
         <div class="fact">
           <dt>存放位置</dt>
           <dd>{{ material.location }}</dd>
@@ -126,7 +126,7 @@ async function doBorrow(safetyConfirmed) {
           <dt>库存</dt>
           <dd>
             <span :class="['stock', 'lx-num', { empty: material.available_quantity === 0 }]">
-              {{ material.available_quantity === 0 ? '借空' : `可借 ${material.available_quantity} / 共 ${material.total_quantity}` }}
+              {{ material.available_quantity === 0 ? '借空' : `可借 ${material.available_quantity}/${material.total_quantity}` }}
             </span>
           </dd>
         </div>
@@ -138,14 +138,18 @@ async function doBorrow(safetyConfirmed) {
 
       <!-- 数字分身知识卡片：点击进入全文页（保姆级教程） -->
       <section v-if="material.knowledge_cards?.length" class="cards">
-        <div class="cards-title">知识卡片</div>
+        <div class="cards-title">
+          <span>知识卡片</span>
+          <span class="title-tag lx-num">CARDS {{ material.knowledge_cards.length }}</span>
+        </div>
         <div
           v-for="c in material.knowledge_cards"
           :key="c.card_id"
           class="kcard"
           @click="router.push(`/cards/${c.card_id}`)"
         >
-          <span>{{ c.title }}</span>
+          <span class="kcard-title">{{ c.title }}</span>
+          <span class="kcard-id lx-num" aria-hidden="true">{{ c.card_id }}</span>
           <span class="arrow">→</span>
         </div>
       </section>
@@ -265,10 +269,20 @@ async function doBorrow(safetyConfirmed) {
   margin-top: var(--lx-space-5);
 }
 .cards-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   font-size: var(--lx-text-sm);
   font-weight: var(--lx-font-semibold);
   color: var(--lx-text-secondary);
   margin-bottom: var(--lx-space-2);
+}
+/* mono 功能标签：真实卡片计数 */
+.title-tag {
+  font-size: var(--lx-text-xs);
+  font-weight: var(--lx-font-regular);
+  letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
 }
 .kcard {
   display: flex;
@@ -289,6 +303,24 @@ async function doBorrow(safetyConfirmed) {
 .kcard:hover {
   border-color: var(--lx-green-light-3);
   background: var(--lx-green-light-9);
+}
+.kcard-title {
+  flex: 1;
+  min-width: 0; /* 长标题在 flex 里收缩省略，不挤掉编号 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 卡片编号：真实 card_id 的 mono 标注，窄屏隐藏保标题完整 */
+.kcard-id {
+  flex-shrink: 0;
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-placeholder);
+}
+@media (max-width: 767px) {
+  .kcard-id {
+    display: none;
+  }
 }
 .kcard .arrow {
   color: var(--lx-green);

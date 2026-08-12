@@ -68,11 +68,11 @@ onMounted(load)
     </el-input>
 
     <div v-loading="loading" class="list">
-      <!-- 物料卡片：左缩略图（72px 方图，加载失败自动降级占位）+ 右信息区 -->
+      <!-- 物料卡片：仪器角标（lx-brackets）+ 左缩略图（72px 方图，加载失败自动降级占位）+ 右信息区 -->
       <article
         v-for="m in materials"
         :key="m.material_id"
-        class="card"
+        class="card lx-brackets"
         tabindex="0"
         @click="open(m.material_id)"
         @keyup.enter="open(m.material_id)"
@@ -88,9 +88,9 @@ onMounted(load)
           <div class="meta"><span class="lx-num">{{ m.material_id }}</span> · {{ m.model || '无型号' }} · {{ m.category }}</div>
           <div class="desc">{{ m.description }}</div>
           <div class="foot">
-            <span class="location">{{ m.location }}</span>
+            <span class="location"><span class="loc-tag lx-num" aria-hidden="true">LOC</span>{{ m.location }}</span>
             <span :class="['stock', 'lx-num', { empty: m.available_quantity === 0 }]">
-              {{ m.available_quantity === 0 ? '借空' : `可借 ${m.available_quantity} / 共 ${m.total_quantity}` }}
+              {{ m.available_quantity === 0 ? '借空' : `可借 ${m.available_quantity}/${m.total_quantity}` }}
             </span>
           </div>
         </div>
@@ -185,6 +185,12 @@ onMounted(load)
 .location {
   color: var(--lx-text-secondary);
   font-size: var(--lx-text-xs);
+}
+/* 库位功能标注：mono 小号 LOC 前缀，后面跟真实位置文本 */
+.loc-tag {
+  letter-spacing: 0.08em;
+  color: var(--lx-text-placeholder);
+  margin-right: var(--lx-space-1);
 }
 /* 库存状态标签：可借=浅绿底主绿字；借空=浅红底危险色字 */
 .stock {
