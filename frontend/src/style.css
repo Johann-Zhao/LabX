@@ -1,17 +1,61 @@
-/* 全局样式：移动端优先的窄栏布局，桌面浏览器同样居中可读 */
+/* ==========================================================================
+   LabX 全局样式：接线设计令牌 + 响应式容器
+   设计规范见 docs/design/labx-ui.md；令牌定义在 styles/tokens.css。
+   页面组件里不写死色值/字号，一律 var(--lx-*)。
+   ========================================================================== */
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: #f5f7fa;
-  color: #303133;
-  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  background: var(--lx-bg-page);
+  color: var(--lx-text-primary);
+  font-family: var(--lx-font-sans);
+  font-size: var(--lx-text-base);
+  line-height: var(--lx-leading);
+  -webkit-font-smoothing: antialiased;
 }
 
+/* 选中文字染浅绿，代替浏览器默认蓝 */
+::selection {
+  background: var(--lx-green-light-8);
+}
+
+/* 数字/编号/库存数等：等宽字体 + 等宽数字，需要处加 class="lx-num" */
+.lx-num {
+  font-family: var(--lx-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 响应式容器：<768px 全宽内边距 12px；≥768px 限宽 960px；≥1280px 限宽 1200px */
 #app {
-  max-width: 640px;
+  width: 100%;
   margin: 0 auto;
   padding: 12px 12px 64px;
+}
+
+@media (min-width: 768px) {
+  #app {
+    max-width: var(--lx-container-md);
+    padding: 24px 24px 80px;
+  }
+}
+
+@media (min-width: 1280px) {
+  #app {
+    max-width: var(--lx-container-lg);
+  }
+}
+
+/* 动效降级：用户系统开"减少动态效果"时，全站动画收敛为瞬时（规范文档第 6 节） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,0 +1,173 @@
+/* ==========================================================================
+   Element Plus 主题覆盖（全局生效，学生端 + 管理端共用）
+   原则：
+   - 只通过 CSS 变量覆盖 + 极少量组件精修，不改 Element 源码。
+   - 覆盖必须保守：管理端现有页面直接吃这套样式，不能改布局、不能改尺寸。
+   - 色值全部来自 tokens.css（--lx-*），此处只做映射，不再发明新颜色。
+   ========================================================================== */
+
+:root {
+  /* ---------- 主色：实验室绿（阶梯为 Element 混色规则：light-N = 混 N0% 白） ---------- */
+  --el-color-primary: #27794f;
+  --el-color-primary-light-3: #68a184;
+  --el-color-primary-light-5: #93bca7;
+  --el-color-primary-light-7: #bed7ca;
+  --el-color-primary-light-8: #d4e4dc;
+  --el-color-primary-light-9: #e9f2ed;
+  --el-color-primary-dark-2: #1f613f;
+
+  /* ---------- 语义色 ----------
+     success 与 primary 同色：全站单一强调色纪律（见 labx-ui.md）。 */
+  --el-color-success: #27794f;
+  --el-color-success-light-3: #68a184;
+  --el-color-success-light-5: #93bca7;
+  --el-color-success-light-7: #bed7ca;
+  --el-color-success-light-8: #d4e4dc;
+  --el-color-success-light-9: #e9f2ed;
+  --el-color-success-dark-2: #1f613f;
+
+  --el-color-warning: #b57f2c;
+  --el-color-warning-light-3: #cba56b;
+  --el-color-warning-light-5: #dabf96;
+  --el-color-warning-light-7: #e9d9c0;
+  --el-color-warning-light-8: #f0e5d5;
+  --el-color-warning-light-9: #f8f2ea;
+  --el-color-warning-dark-2: #916623;
+
+  --el-color-danger: #be4a43;
+  --el-color-danger-light-3: #d2807b;
+  --el-color-danger-light-5: #dea4a1;
+  --el-color-danger-light-7: #ecc9c7;
+  --el-color-danger-light-8: #f2dbd9;
+  --el-color-danger-light-9: #f8edec;
+  --el-color-danger-dark-2: #983b36;
+
+  --el-color-error: #be4a43;
+  --el-color-error-light-3: #d2807b;
+  --el-color-error-light-5: #dea4a1;
+  --el-color-error-light-7: #ecc9c7;
+  --el-color-error-light-8: #f2dbd9;
+  --el-color-error-light-9: #f8edec;
+  --el-color-error-dark-2: #983b36;
+
+  --el-color-info: #6e7572;
+  --el-color-info-light-3: #9a9e9c;
+  --el-color-info-light-5: #b6bab8;
+  --el-color-info-light-7: #d4d6d5;
+  --el-color-info-light-8: #e2e3e3;
+  --el-color-info-light-9: #f0f1f1;
+  --el-color-info-dark-2: #585e5b;
+
+  /* ---------- 文字 ---------- */
+  --el-text-color-primary: #1c2320;
+  --el-text-color-regular: #3a423d;
+  --el-text-color-secondary: #656d68;
+  --el-text-color-placeholder: #9aa19c;
+  --el-text-color-disabled: #b4b9b5;
+
+  /* ---------- 边框（细边框体系，hover 才加深） ---------- */
+  --el-border-color: #d8dbd5;
+  --el-border-color-light: #e4e6e1;
+  --el-border-color-lighter: #ebede8;
+  --el-border-color-extra-light: #f1f2ee;
+  --el-border-color-hover: #c4c8c1;
+
+  /* ---------- 填充色（表头、禁用底、hover 底） ---------- */
+  --el-fill-color: #f0f1ed;
+  --el-fill-color-light: #f4f5f1;
+  --el-fill-color-lighter: #f7f8f5;
+  --el-fill-color-extra-light: #fafaf8;
+  --el-fill-color-dark: #e6e8e2;
+  --el-fill-color-darker: #dfe1da;
+  --el-fill-color-blank: #ffffff;
+
+  /* ---------- 背景 ---------- */
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f7f7f4;
+  --el-bg-color-overlay: #ffffff;
+
+  /* ---------- 禁用态 ---------- */
+  --el-disabled-bg-color: #f0f1ed;
+  --el-disabled-text-color: #b4b9b5;
+  --el-disabled-border-color: #e4e6e1;
+
+  /* ---------- 字体与圆角 ---------- */
+  --el-font-family: var(--lx-font-sans);
+  --el-font-size-base: var(--lx-text-base);
+  --el-border-radius-base: var(--lx-radius-base);
+  --el-border-radius-small: var(--lx-radius-sm);
+  --el-border-radius-round: var(--lx-radius-pill);
+
+  /* ---------- 阴影：去厚重感，统一染墨色调 ---------- */
+  --el-box-shadow: var(--lx-shadow-3);
+  --el-box-shadow-light: var(--lx-shadow-2);
+  --el-box-shadow-lighter: var(--lx-shadow-1);
+  --el-box-shadow-dark: 0 12px 32px -4px rgba(28, 35, 32, 0.18);
+
+  /* ---------- 遮罩 ---------- */
+  --el-overlay-color-lighter: rgba(28, 35, 32, 0.5);
+  --el-mask-color: rgba(255, 255, 255, 0.9);
+
+  /* ---------- 组件级变量 ---------- */
+  --el-dialog-border-radius: var(--lx-radius-lg);
+}
+
+/* ==========================================================================
+   组件轻量精修（只动质感，不动布局尺寸）
+   ========================================================================== */
+
+/* 按钮：状态切换加过渡，按下有 1px 触觉反馈 */
+.el-button {
+  font-weight: var(--lx-font-medium);
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    background-color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out),
+    transform var(--lx-duration-fast) var(--lx-ease-out);
+}
+.el-button:active {
+  transform: translateY(1px);
+}
+
+/* 输入框：默认细边框，hover/focus 过渡柔和 */
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  transition:
+    box-shadow var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+
+/* 标签：小圆角，去掉默认的粗重视觉 */
+.el-tag {
+  border-radius: var(--lx-radius-sm);
+}
+
+/* 卡片：细边框 + 几乎不可见的阴影，不要"浮起来的纸"感 */
+.el-card {
+  border-color: var(--lx-border);
+  border-radius: var(--lx-radius-md);
+}
+
+/* 对话框：圆角放大一档，阴影用最深档 */
+.el-dialog {
+  border-radius: var(--lx-radius-lg);
+  box-shadow: var(--lx-shadow-3);
+}
+
+/* 全局消息提示：细边框 + 轻阴影，圆角对齐卡片档 */
+.el-message {
+  border-radius: var(--lx-radius-md);
+  box-shadow: var(--lx-shadow-2);
+}
+
+/* 消息框（确认/驳回等）圆角对齐弹窗 */
+.el-message-box {
+  border-radius: var(--lx-radius-lg);
+}
+
+/* 键盘焦点：明显但克制的绿描边（Element 组件自身的 focus 样式不受影响） */
+:focus-visible {
+  outline: 2px solid var(--lx-green-light-5);
+  outline-offset: 1px;
+}

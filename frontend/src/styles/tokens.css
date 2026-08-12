@@ -1,0 +1,158 @@
+/* ==========================================================================
+   LabX 设计令牌（Design Tokens）
+   配套规范文档：docs/design/labx-ui.md（改值前先读它）
+   规则：
+   - 命名统一 --lx-*，页面组件里禁止写死色值/字号/阴影，一律 var(--lx-*)。
+   - 浅色是主主题（:root），深色只用于开屏动画（[data-theme="dark"]）。
+   - 深色主题只覆盖"颜色类"令牌；字阶/间距/圆角/动效两套主题共用。
+   ========================================================================== */
+
+:root {
+  /* ---------- 品牌色：实验室绿 ----------
+     由旧主色 #42b883 精调：色相不变，加深、降饱和，更像仪器而不是玩具。
+     白字压其上对比度 5.34:1，过 WCAG AA。 */
+  --lx-green: #27794f;
+  --lx-green-light-3: #68a184; /* hover 提亮档（按钮悬停等） */
+  --lx-green-light-5: #93bca7;
+  --lx-green-light-7: #bed7ca;
+  --lx-green-light-8: #d4e4dc; /* 浅绿描边/选中边框 */
+  --lx-green-light-9: #e9f2ed; /* 浅绿底：选中态、激活标签、徽标底色 */
+  --lx-green-dark-2: #1f613f;  /* active 按下加深档 */
+
+  /* ---------- 中性色：暖白底 + 墨色字（不用纯白 #fff 做页面底、不用纯黑 #000） ---------- */
+  --lx-bg-page: #f7f7f4;       /* 页面底色：暖白 */
+  --lx-bg-surface: #ffffff;    /* 卡片、气泡、弹窗等浮层 */
+  --lx-bg-subtle: #f0f1ed;     /* 内嵌区块、表头、禁用底 */
+  --lx-bg-hover: #f4f5f1;      /* 列表行/可点项 hover 底色 */
+
+  --lx-text-primary: #1c2320;      /* 墨色：标题、正文主力 */
+  --lx-text-regular: #3a423d;      /* 正文 */
+  --lx-text-secondary: #656d68;    /* 次要说明、meta 信息 */
+  --lx-text-placeholder: #9aa19c;  /* 输入占位、弱提示 */
+  --lx-text-disabled: #b4b9b5;     /* 禁用文字 */
+
+  --lx-border: #d8dbd5;        /* 默认细边框（1px） */
+  --lx-border-light: #e4e6e1;  /* 更弱的分隔线 */
+  --lx-border-lighter: #ebede8;
+  --lx-border-strong: #c4c8c1; /* 强调边框：输入框 hover 等 */
+
+  /* ---------- 语义色（低饱和，与绿主色同一灰度家族） ---------- */
+  --lx-success: #27794f; /* 成功 = 主绿（单一强调色纪律，见规范文档） */
+  --lx-warning: #b57f2c;
+  --lx-danger: #be4a43;
+  --lx-info: #6e7572;
+  --lx-warning-bg: #f8f2ea;
+  --lx-danger-bg: #f8edec;
+  --lx-info-bg: #f0f1f1;
+
+  /* ---------- 字体 ----------
+     只用系统字体栈，不引入 webfont。 */
+  --lx-font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  /* 数字、编号、库存数、记录号等统一用等宽栈 + 等宽数字 */
+  --lx-font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono',
+    Consolas, 'Roboto Mono', monospace;
+
+  /* ---------- 字阶（对齐 Element 14px 基准，页面只能取这几档） ---------- */
+  --lx-text-xs: 12px;  /* 辅助说明、标签、时间戳 */
+  --lx-text-sm: 13px;  /* 次级 UI 文本 */
+  --lx-text-base: 14px;  /* 正文 / 控件默认 */
+  --lx-text-md: 16px;  /* 强调正文、卡片标题 */
+  --lx-text-lg: 18px;  /* 区块标题 */
+  --lx-text-xl: 20px;  /* 页面标题 */
+  --lx-text-2xl: 24px; /* 大标题 */
+  --lx-text-3xl: 28px;
+  --lx-text-4xl: 32px; /* 开屏、关键大数字 */
+
+  --lx-leading-tight: 1.25; /* 标题 */
+  --lx-leading: 1.6;        /* 正文、对话气泡 */
+
+  --lx-font-regular: 400;
+  --lx-font-medium: 500;
+  --lx-font-semibold: 600;
+  --lx-font-bold: 700;
+
+  /* ---------- 间距：8px 基网（4 是半档，只用于图标与文字的微距） ---------- */
+  --lx-space-1: 4px;
+  --lx-space-2: 8px;
+  --lx-space-3: 12px;
+  --lx-space-4: 16px;
+  --lx-space-5: 24px;
+  --lx-space-6: 32px;
+  --lx-space-7: 48px;
+  --lx-space-8: 64px;
+
+  /* ---------- 圆角：一套刻度全站通用（精密感 = 小圆角，不用大圆） ---------- */
+  --lx-radius-sm: 4px;   /* 标签、小控件 */
+  --lx-radius-base: 6px; /* 按钮、输入框 */
+  --lx-radius-md: 8px;   /* 卡片、对话气泡 */
+  --lx-radius-lg: 12px;  /* 弹窗、抽屉 */
+  --lx-radius-pill: 999px; /* 胶囊标签 */
+
+  /* ---------- 阴影：细边框为主、阴影为辅，墨色染调不用纯黑 ----------
+     平级内容用 1px 边框分组，阴影只给"真的浮起来"的层（下拉/弹窗/气泡）。 */
+  --lx-shadow-1: 0 1px 2px rgba(28, 35, 32, 0.05); /* 轻微托起 */
+  --lx-shadow-2: 0 4px 12px rgba(28, 35, 32, 0.08); /* 下拉、气泡、消息条 */
+  --lx-shadow-3: 0 12px 32px -8px rgba(28, 35, 32, 0.14); /* 弹窗、抽屉 */
+
+  /* ---------- 动效：只用 CSS transition/keyframes，150-400ms，ease-out 类 ----------
+     禁 linear；只动 transform 和 opacity（+ 颜色/边框这类便宜属性）。 */
+  --lx-duration-fast: 150ms;  /* hover、按下反馈 */
+  --lx-duration-base: 250ms;  /* 展开收起、显隐切换 */
+  --lx-duration-slow: 400ms;  /* 弹窗进出、页面级过渡 */
+  --lx-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 显形/入场：快出慢收 */
+  --lx-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1); /* 状态互转通用 */
+
+  /* ---------- z-index 刻度（不许再随手写 z-50/z-9999） ----------
+     Element Plus 弹层从 2000 起自增托管，自定义层只用 100 及以下。 */
+  --lx-z-header: 100;   /* 吸顶头部/导航 */
+  --lx-z-element-popup: 2000; /* Element 下拉/弹窗托管区，勿占用 */
+  --lx-z-message: 3000; /* ElMessage 全局提示 */
+
+  /* ---------- 容器宽度（响应式断点见 style.css 与规范文档） ---------- */
+  --lx-container-md: 960px;  /* ≥768px */
+  --lx-container-lg: 1200px; /* ≥1280px */
+}
+
+/* ==========================================================================
+   深色主题：仅用于开屏动画（同系深色反转）
+   用法：开屏容器（或 <html>）挂 data-theme="dark"，结束后移除。
+   只覆盖颜色令牌；Element 组件在深色开屏里不出现，无需覆盖 --el-*。
+   ========================================================================== */
+[data-theme='dark'] {
+  --lx-green: #5d9a7b; /* 深底上提亮主绿，对比度 5.56:1 */
+  --lx-green-light-3: #7fb398;
+  --lx-green-light-5: #4a8264;
+  --lx-green-light-7: #3a6850;
+  --lx-green-light-8: #2b4437; /* 深底上的绿色描边 */
+  --lx-green-light-9: #1c2a23; /* 深底上的"浅绿底"：选中态 */
+  --lx-green-dark-2: #8fc0a4;
+
+  --lx-bg-page: #101613;    /* 墨绿近黑，不用纯黑 */
+  --lx-bg-surface: #171e1a;
+  --lx-bg-subtle: #1e2622;
+  --lx-bg-hover: #222b26;
+
+  --lx-text-primary: #e9ebe8;
+  --lx-text-regular: #c6cbc6;
+  --lx-text-secondary: #8f978f;
+  --lx-text-placeholder: #6a726b;
+  --lx-text-disabled: #565d57;
+
+  --lx-border: #2c3530;
+  --lx-border-light: #262e29;
+  --lx-border-lighter: #212823;
+  --lx-border-strong: #3a453f;
+
+  --lx-warning: #d8a75a;
+  --lx-danger: #d4736b;
+  --lx-info: #9aa19c;
+  --lx-warning-bg: #2e2c1e;
+  --lx-danger-bg: #2d2420;
+  --lx-info-bg: #242824;
+
+  /* 深色下阴影更深才看得见 */
+  --lx-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --lx-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --lx-shadow-3: 0 12px 32px -8px rgba(0, 0, 0, 0.5);
+}
