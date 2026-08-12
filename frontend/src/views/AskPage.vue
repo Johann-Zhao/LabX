@@ -1,10 +1,11 @@
 <script setup>
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { agentChatStream, askQuestion, fetchMaterial, fetchRecords } from '../api'
+import { agentChatStream, askQuestion, fetchMaterial, fetchMaterials, fetchRecords } from '../api'
 import { currentUser } from '../store'
 import BomCard from './BomCard.vue'
+import MaterialImage from '../components/MaterialImage.vue'
 
 const route = useRoute()
 const materialId = route.query.material_id || null // 从物料详情页进入时带上（数字分身对话窗）
@@ -12,6 +13,7 @@ const materialName = ref('')
 
 // 会话 ID：页面生命周期内不变，用于后端挂起/恢复澄清状态（见 docs/agent-workflow.md）
 const convId = `conv-${Date.now()}`
+const convIdShort = convId.slice(-6) // 控制台头部只显示尾号，全 ID 无意义
 
 // { role, text, refs, steps, provenance, clarify: {options}, bom }
 const messages = ref([])
@@ -24,20 +26,48 @@ const expandedSteps = ref({})
 const streamLines = ref([])
 const streamActive = ref(false)
 
-// 常用提问：空状态欢迎区与右栏共用，点击即发送
+// 常用提问：空状态欢迎区指令行，点击即发送
 const SUGGESTIONS = ['我想做自动浇花装置', '我的电机不转', '这块板子能做什么', 'Arduino 还有吗']
 
-// 右栏"在借件数"：null = 未取到（静默降级，该行不显示）
+// 能力矩阵（左轨）：四大机制 → 点击即把对应演示提问送进对话（四幕剧本的入口）
+const CAPABILITIES = [
+  { code: 'C1', name: '借用即学习', desc: '借后推送关键知识卡片，上手零门槛', prompt: 'Arduino 还有吗' },
+  { code: 'C2', name: '愿望到方案', desc: '一句想法转 BOM 清单，可一键预约', prompt: '我想做自动浇花装置' },
+  { code: 'C3', name: '排障问答', desc: '物料数字分身随问随答，五步排障', prompt: '我的电机不转' },
+  { code: 'C4', name: '经验闭环', desc: '归还心得沉淀为可检索的社区经验', prompt: '这块板子能做什么' },
+]
+
+// 快捷功能（右轨）：mono 序号 + 路由链接
+const QUICK_LINKS = [
+  { idx: '01', to: '/materials', label: '去借物料' },
+  { idx: '02', to: '/records', label: '我的借用' },
+  { idx: '03', to: '/admin', label: '管理台' },
+]
+
+// 右轨"在借件数"：null = 未取到（静默降级，该行不显示）
 const borrowingCount = ref(null)
 
+// 右轨物料精选 + 左轨系统状态：真实接口数据，失败静默降级（对应行显示 —）
+const materials = ref([])
+const showcase = computed(() => materials.value.slice(0, 4))
+const statsTotal = computed(() => (materials.value.length ? materials.value.length : null))
+const statsAvail = computed(() =>
+  materials.value.length ? materials.value.reduce((s, m) => s + (m.available_quantity || 0), 0) : null
+)
+
+// 控制台时钟：秒级跳动的遥测时间（mono 等宽数字不抖动）
+const now = ref(new Date())
+let clockTimer = null
+const clock = computed(() => now.value.toLocaleTimeString('zh-CN', { hour12: false }))
+
 const PROVENANCE_META = {
-  local_kb: { text: '本地知识库', type: 'success' },
-  web: { text: '网络检索', type: 'primary' },
-  model: { text: '通用经验', type: 'info' },
-  offline: { text: '离线兜底', type: 'warning' },
+  local_kb: { text: '本地知识库', cls: 'local' },
+  web: { text: '网络检索', cls: 'web' },
+  model: { text: '通用经验', cls: 'model' },
+  offline: { text: '离线兜底', cls: 'offline' },
 }
 
-// 右栏数据：借用记录接口失败时静默降级，不影响对话主流程
+// 右轨数据：借用记录接口失败时静默降级，不影响对话主流程
 async function loadBorrowing() {
   try {
     const res = await fetchRecords(currentUser.id)
@@ -49,11 +79,22 @@ async function loadBorrowing() {
   }
 }
 
-// 顶栏切换账号后，右栏"在借件数"跟着换
+async function loadMaterials() {
+  try {
+    const res = await fetchMaterials()
+    if (res.code === 0) materials.value = res.data
+  } catch {
+    /* 静默降级 */
+  }
+}
+
+// 顶栏切换账号后，右轨"在借件数"跟着换
 watch(() => currentUser.id, loadBorrowing)
 
 onMounted(async () => {
+  clockTimer = setInterval(() => (now.value = new Date()), 1000)
   loadBorrowing()
+  loadMaterials()
   if (materialId) {
     const res = await fetchMaterial(materialId)
     if (res.code === 0) materialName.value = res.data.name
@@ -65,13 +106,15 @@ onMounted(async () => {
   // 非物料模式：不再预置长欢迎气泡，空状态欢迎区由模板渲染
 })
 
+onUnmounted(() => clearInterval(clockTimer))
+
 async function send() {
   const question = input.value.trim()
   if (!question || thinking.value) return
   await sendText(question)
 }
 
-// 点击澄清选项/常用提问 = 把文本作为下一条消息发送（同一会话）
+// 点击澄清选项/常用提问/能力矩阵 = 把文本作为下一条消息发送（同一会话）
 async function sendText(text) {
   messages.value.push({ role: 'user', text })
   input.value = ''
@@ -118,9 +161,59 @@ async function scrollToBottom() {
 </script>
 
 <template>
-  <div class="ask-page">
-    <!-- 左侧：对话主栏 -->
-    <div class="chat-col">
+  <!-- 控制台三栏：左能力矩阵 / 中对话 / 右物料+快捷；窄屏塌成单列，侧轨沉到对话下方 -->
+  <div class="deck">
+    <!-- 左轨：能力矩阵 + 系统状态（≥1280px 在侧，<1024px 沉底） -->
+    <aside class="rail rail-left">
+      <section class="rail-sec">
+        <div class="sec-head">
+          <span>能力矩阵</span>
+          <span class="sec-tag lx-num">CAP {{ CAPABILITIES.length }}</span>
+        </div>
+        <button v-for="c in CAPABILITIES" :key="c.code" type="button" class="cap-row" @click="sendText(c.prompt)">
+          <span class="cap-code lx-num">{{ c.code }}</span>
+          <span class="cap-body">
+            <span class="cap-name">{{ c.name }}</span>
+            <span class="cap-desc">{{ c.desc }}</span>
+          </span>
+          <span class="row-arrow" aria-hidden="true">›</span>
+        </button>
+      </section>
+
+      <section class="rail-sec">
+        <div class="sec-head">
+          <span>系统状态</span>
+          <span class="sec-tag lx-num">SYS</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">物料登记</span>
+          <span class="stat-val lx-num">{{ statsTotal ?? '—' }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">当前可借</span>
+          <span class="stat-val lx-num">{{ statsAvail ?? '—' }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">会话</span>
+          <span class="stat-val lx-num">{{ convIdShort }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">本地时间</span>
+          <span class="stat-val lx-num">{{ clock }}</span>
+        </div>
+      </section>
+    </aside>
+
+    <!-- 中央：对话控制台 -->
+    <main class="console">
+      <!-- 控制台头：在线 LED + mono 状态行 + 遥测时钟 -->
+      <div class="console-head">
+        <span class="led" aria-hidden="true"></span>
+        <span class="head-title lx-num">LABX AGENT</span>
+        <span class="head-status lx-num">ONLINE</span>
+        <span class="head-clock lx-num">{{ clock }}</span>
+      </div>
+
       <el-alert
         v-if="materialId"
         type="success"
@@ -130,31 +223,41 @@ async function scrollToBottom() {
       />
 
       <div ref="listRef" class="msg-list">
-        <!-- 空状态欢迎区：助手名 + 定位语 + 常用提问（点击即发送） -->
+        <!-- 空状态欢迎区：雷达徽标 + 定位语 + 指令行（点击即发送） -->
         <div v-if="!messages.length" class="welcome">
-          <div class="welcome-name">LabX 智能助手</div>
-          <p class="welcome-tagline">说个想法，我出方案并可一键预约物料；遇到故障，我帮你一步步排查。</p>
-          <div class="chips">
-            <el-button
-              v-for="q in SUGGESTIONS"
+          <div class="radar" aria-hidden="true">
+            <span class="radar-ring r1"></span>
+            <span class="radar-ring r2"></span>
+            <span class="radar-sweep"></span>
+            <span class="radar-dot"></span>
+          </div>
+          <div class="welcome-kicker lx-num">LABX · EXPERIENTIAL AGENT</div>
+          <div class="welcome-name">说个想法，剩下的交给我</div>
+          <p class="welcome-tagline">出方案并可一键预约物料；遇到故障，一步步带你排查。</p>
+          <div class="cmd-list">
+            <button
+              v-for="(q, i) in SUGGESTIONS"
               :key="q"
-              size="small"
-              round
-              class="chip"
+              type="button"
+              class="cmd-row"
               @click="sendText(q)"
             >
-              {{ q }}
-            </el-button>
+              <span class="cmd-idx lx-num">{{ String(i + 1).padStart(2, '0') }}</span>
+              <span class="cmd-text">{{ q }}</span>
+              <span class="row-arrow" aria-hidden="true">›</span>
+            </button>
           </div>
         </div>
 
         <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
           <!-- 智能体协作过程（排障演示的高潮镜头） -->
           <div v-if="m.steps?.length" class="steps" @click="expandedSteps[i] = !expandedSteps[i]">
-            <span class="steps-toggle">{{ expandedSteps[i] ? '▾' : '▸' }} 多智能体协作过程（{{ m.steps.length }} 步）</span>
+            <span class="steps-toggle lx-num">
+              {{ expandedSteps[i] ? '▾' : '▸' }} 多智能体协作过程（{{ m.steps.length }} 步）
+            </span>
             <div v-show="expandedSteps[i]" class="steps-list">
               <div v-for="(s, j) in m.steps" :key="j" class="step-item">
-                <span class="step-name">{{ j + 1 }}. {{ s.step }}</span>
+                <span class="step-name lx-num">{{ String(j + 1).padStart(2, '0') }} · {{ s.step }}</span>
                 <span class="step-detail">{{ s.detail }}</span>
               </div>
             </div>
@@ -162,14 +265,12 @@ async function scrollToBottom() {
 
           <div class="bubble">
             {{ m.text }}
-            <el-tag
+            <span
               v-if="m.provenance && PROVENANCE_META[m.provenance]"
-              :type="PROVENANCE_META[m.provenance].type"
-              size="small"
-              class="prov-tag"
+              :class="['prov', 'lx-num', PROVENANCE_META[m.provenance].cls]"
             >
-              {{ PROVENANCE_META[m.provenance].text }}
-            </el-tag>
+              <span class="prov-dot" aria-hidden="true"></span>{{ PROVENANCE_META[m.provenance].text }}
+            </span>
           </div>
 
           <!-- 澄清选项：点击即回答 -->
@@ -197,21 +298,24 @@ async function scrollToBottom() {
             </template>
           </div>
         </div>
-        <!-- 过程显化区（流式）：真实执行状态逐行显示，当前行带跳动圆点，final 到达后全部置灰 -->
+
+        <!-- 过程显化区（流式）：终端日志风，真实执行状态逐行显示，当前行带跳动圆点 -->
         <div v-if="thinking" class="msg assistant">
           <div class="stream-proc">
             <template v-if="streamLines.length">
               <div
                 v-for="(line, i) in streamLines"
                 :key="i"
-                :class="['stream-line', { current: streamActive && i === streamLines.length - 1 }]"
+                :class="['stream-line', 'lx-num', { current: streamActive && i === streamLines.length - 1 }]"
               >
-                {{ line }}
+                <span class="stream-prefix" aria-hidden="true">›</span>{{ line }}
                 <span v-if="streamActive && i === streamLines.length - 1" class="dots"><i /><i /><i /></span>
               </div>
             </template>
             <!-- 流式尚未产出第一行（或回退非流式）时的保底占位，不让用户干等 -->
-            <div v-else class="stream-line current">正在处理，请稍候<span class="dots"><i /><i /><i /></span></div>
+            <div v-else class="stream-line lx-num current">
+              <span class="stream-prefix" aria-hidden="true">›</span>正在处理，请稍候<span class="dots"><i /><i /><i /></span>
+            </div>
           </div>
         </div>
       </div>
@@ -239,11 +343,15 @@ async function scrollToBottom() {
         </el-button>
         <el-button type="primary" size="large" :loading="thinking" @click="send">发送</el-button>
       </div>
-    </div>
+    </main>
 
-    <!-- 右侧快捷栏：仅 ≥1024px 显示，数据失败静默降级；容器卡挂仪器角标 -->
-    <aside class="side-col">
-      <div class="side-card lx-brackets">
+    <!-- 右轨：用户读数 + 物料精选 + 快捷功能（≥1024px 在侧，窄屏沉底） -->
+    <aside class="rail rail-right">
+      <section class="rail-sec">
+        <div class="sec-head">
+          <span>当前用户</span>
+          <span class="sec-tag lx-num">USER</span>
+        </div>
         <div class="user-name">{{ currentUser.name }}</div>
         <div class="user-id lx-num">ID {{ currentUser.id }}</div>
         <!-- 在借件数：仪器读数风（大号 mono 数字 + 小号单位标签） -->
@@ -251,79 +359,272 @@ async function scrollToBottom() {
           <div class="readout-num lx-num">{{ borrowingCount }}</div>
           <div class="readout-label lx-num">当前在借 · 件</div>
         </div>
-      </div>
+      </section>
 
-      <div class="side-card lx-brackets">
-        <div class="side-title">快捷入口</div>
-        <router-link to="/materials" class="side-link">去借物料</router-link>
-        <router-link to="/records" class="side-link">我的借用</router-link>
-      </div>
+      <section class="rail-sec">
+        <div class="sec-head">
+          <span>物料精选</span>
+          <span class="sec-tag lx-num">MAT {{ showcase.length }}</span>
+        </div>
+        <router-link v-for="m in showcase" :key="m.material_id" :to="`/materials/${m.material_id}`" class="mat-row">
+          <MaterialImage :material-id="m.material_id" :name="m.name" class="mat-thumb" />
+          <span class="mat-body">
+            <span class="mat-name">{{ m.name }}</span>
+            <span class="mat-meta lx-num">{{ m.material_id }}</span>
+          </span>
+          <span :class="['mat-stock', 'lx-num', { empty: m.available_quantity === 0 }]">
+            <span class="stock-dot" aria-hidden="true"></span>
+            {{ m.available_quantity === 0 ? '借空' : `×${m.available_quantity}` }}
+          </span>
+        </router-link>
+        <div v-if="!showcase.length" class="mat-empty lx-num">NO DATA</div>
+      </section>
 
-      <div class="side-card lx-brackets">
-        <div class="side-title">
-          <span>常用提问</span>
-          <span class="title-tag lx-num">QA {{ SUGGESTIONS.length }}</span>
+      <section class="rail-sec">
+        <div class="sec-head">
+          <span>快捷功能</span>
+          <span class="sec-tag lx-num">NAV</span>
         </div>
-        <div class="side-chips">
-          <el-button
-            v-for="q in SUGGESTIONS"
-            :key="q"
-            size="small"
-            round
-            class="chip"
-            @click="sendText(q)"
-          >
-            {{ q }}
-          </el-button>
-        </div>
-      </div>
+        <router-link v-for="l in QUICK_LINKS" :key="l.to" :to="l.to" class="qlink">
+          <span class="q-idx lx-num">{{ l.idx }}</span>
+          <span class="q-label">{{ l.label }}</span>
+          <span class="row-arrow" aria-hidden="true">›</span>
+        </router-link>
+      </section>
     </aside>
   </div>
 </template>
 
 <style scoped>
-.ask-page {
+/* ==========================================================================
+   布局：控制台三栏（deck）
+   ≥1280px：左轨 248px + 中对话 + 右轨 288px
+   1024-1279px：中对话 + 右轨（左轨收起，能力入口由欢迎区指令行承担）
+   <1024px：单列，对话在上，两条侧轨沉到下方
+   ========================================================================== */
+.deck {
   display: flex;
   gap: var(--lx-space-5);
   height: calc(100vh - 170px);
 }
 
-/* ---------- 左侧对话主栏 ---------- */
-.chat-col {
+/* ---------- 中央对话控制台 ---------- */
+.console {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-md);
+  overflow: hidden;
+}
+
+/* 控制台头：发线分隔，mono 状态行 */
+.console-head {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-2);
+  padding: var(--lx-space-2) var(--lx-space-4);
+  border-bottom: 1px solid var(--lx-border-lighter);
+  flex-shrink: 0;
+}
+/* 在线 LED：主绿圆点 + 呼吸光晕（状态表达，非装饰） */
+.led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lx-green);
+  box-shadow: 0 0 0 0 var(--lx-green-glow);
+  animation: led-pulse 1.6s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes led-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--lx-green-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+.head-title {
+  font-size: var(--lx-text-xs);
+  font-weight: var(--lx-font-semibold);
+  letter-spacing: 0.12em;
+  color: var(--lx-text-primary);
+}
+.head-status {
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.1em;
+  color: var(--lx-green);
+}
+.head-clock {
+  margin-left: auto;
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.06em;
+  color: var(--lx-text-placeholder);
 }
 .ctx {
-  margin-bottom: var(--lx-space-2);
+  margin: var(--lx-space-2) var(--lx-space-3) 0;
+  flex-shrink: 0;
 }
+
 .msg-list {
   flex: 1;
   overflow-y: auto;
-  padding: var(--lx-space-2) var(--lx-space-1);
+  padding: var(--lx-space-3) var(--lx-space-4);
   display: flex;
   flex-direction: column;
   gap: var(--lx-space-3);
+  /* 细滚动条（6px）：贴边不抢戏 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--lx-border-strong) transparent;
+}
+.msg-list::-webkit-scrollbar {
+  width: 6px;
+}
+.msg-list::-webkit-scrollbar-thumb {
+  background: var(--lx-border-strong);
+  border-radius: var(--lx-radius-pill);
+}
+.msg-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-/* 空状态欢迎区：克制左对齐，不做营销 hero */
+/* ---------- 空状态欢迎区 ---------- */
 .welcome {
-  padding: var(--lx-space-6) var(--lx-space-3) var(--lx-space-4);
+  margin: auto 0; /* 消息少时垂直居中，控制台感 */
+  padding: var(--lx-space-5) var(--lx-space-2) var(--lx-space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+/* 雷达徽标：双环 + 旋转扫掠 + 中心呼吸点，纯 CSS 画，无图片依赖 */
+.radar {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  margin-bottom: var(--lx-space-4);
+}
+.radar-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid var(--lx-green-light-7);
+}
+.radar-ring.r1 {
+  inset: 0;
+}
+.radar-ring.r2 {
+  inset: 18px;
+  border-color: var(--lx-green-light-8);
+}
+/* 扫掠：锥形渐变转一圈 4.2s，尾迹衰减 */
+.radar-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--lx-green-glow), var(--lx-green-glow-soft) 90deg, transparent 120deg);
+  animation: radar-sweep 4.2s linear infinite;
+}
+@keyframes radar-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.radar-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--lx-green);
+  box-shadow: 0 0 0 0 var(--lx-green-glow);
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+.welcome-kicker {
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.18em;
+  color: var(--lx-green);
+  margin-bottom: var(--lx-space-2);
 }
 .welcome-name {
-  font-size: var(--lx-text-xl);
-  font-weight: var(--lx-font-semibold);
+  font-size: var(--lx-text-2xl);
+  font-weight: var(--lx-font-bold);
   color: var(--lx-text-primary);
   line-height: var(--lx-leading-tight);
 }
 .welcome-tagline {
-  margin: var(--lx-space-2) 0 var(--lx-space-4);
+  margin: var(--lx-space-2) 0 var(--lx-space-5);
   font-size: var(--lx-text-base);
   color: var(--lx-text-secondary);
 }
 
-/* 消息：入场 150ms 淡入上移 */
+/* 指令行：mono 序号 + 文本 + ›，发线分隔，hover 整行染浅绿（命令面板语言） */
+.cmd-list {
+  width: 100%;
+  max-width: 420px;
+  border-top: 1px solid var(--lx-border-light);
+}
+.cmd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-3);
+  width: 100%;
+  padding: var(--lx-space-3) var(--lx-space-2);
+  border: none;
+  border-bottom: 1px solid var(--lx-border-light);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.cmd-idx {
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
+  transition: color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.cmd-text {
+  flex: 1;
+  font-size: var(--lx-text-base);
+  color: var(--lx-text-regular);
+}
+.cmd-row:hover {
+  background: var(--lx-green-light-9);
+}
+.cmd-row:hover .cmd-idx,
+.cmd-row:hover .row-arrow {
+  color: var(--lx-green);
+}
+
+/* 行尾 › 箭头：cap/cmd/qlink 共用 */
+.row-arrow {
+  font-family: var(--lx-font-mono);
+  color: var(--lx-text-placeholder);
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    transform var(--lx-duration-fast) var(--lx-ease-out);
+}
+.cmd-row:hover .row-arrow,
+.cap-row:hover .row-arrow,
+.qlink:hover .row-arrow {
+  transform: translateX(2px);
+}
+
+/* 键盘可达性：指令行/能力行/快捷行 focus 可见描边 */
+.cmd-row:focus-visible,
+.cap-row:focus-visible,
+.qlink:focus-visible,
+.mat-row:focus-visible {
+  outline: 2px solid var(--lx-green);
+  outline-offset: -2px;
+}
+
+/* ---------- 消息 ---------- */
 .msg {
   display: flex;
   flex-direction: column;
@@ -361,16 +662,48 @@ async function scrollToBottom() {
   color: var(--lx-bg-surface);
 }
 .assistant .bubble {
-  background: var(--lx-bg-surface);
+  background: var(--lx-bg-subtle);
   color: var(--lx-text-regular);
-  border: 1px solid var(--lx-border-light);
-}
-.prov-tag {
-  margin-left: var(--lx-space-2);
-  vertical-align: middle;
 }
 
-/* 过程显化区（流式） */
+/* provenance：mono 小标 + 状态点（替代 el-tag 胶囊，更贴控制台语言） */
+.prov {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lx-space-1);
+  margin-left: var(--lx-space-2);
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+.prov-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.prov.local {
+  color: var(--lx-green);
+}
+.prov.local .prov-dot {
+  background: var(--lx-green);
+}
+.prov.web,
+.prov.model {
+  color: var(--lx-info);
+}
+.prov.web .prov-dot,
+.prov.model .prov-dot {
+  background: var(--lx-info);
+}
+.prov.offline {
+  color: var(--lx-warning);
+}
+.prov.offline .prov-dot {
+  background: var(--lx-warning);
+}
+
+/* ---------- 过程显化区（流式）：终端日志风 ---------- */
 .stream-proc {
   display: flex;
   flex-direction: column;
@@ -378,14 +711,18 @@ async function scrollToBottom() {
   margin: var(--lx-space-1) 0 var(--lx-space-2);
   padding: var(--lx-space-2) var(--lx-space-3);
   background: var(--lx-bg-subtle);
-  border: 1px solid var(--lx-border-lighter);
-  border-radius: var(--lx-radius-md);
+  border-left: 2px solid var(--lx-green-light-7);
+  border-radius: 0 var(--lx-radius-sm) var(--lx-radius-sm) 0;
   font-size: var(--lx-text-xs);
 }
 .stream-line {
   color: var(--lx-text-placeholder); /* 已完成的状态行：置灰 */
   line-height: var(--lx-leading);
-  animation: line-in var(--lx-duration-base) var(--lx-ease-out); /* 新行淡入上移 */
+  animation: line-in var(--lx-duration-base) var(--lx-ease-out);
+}
+.stream-prefix {
+  margin-right: var(--lx-space-2);
+  color: var(--lx-green-light-5);
 }
 @keyframes line-in {
   from {
@@ -428,7 +765,7 @@ async function scrollToBottom() {
   }
 }
 
-/* 多智能体协作过程（折叠面板） */
+/* ---------- 多智能体协作过程（折叠面板） ---------- */
 .steps {
   margin-bottom: var(--lx-space-1);
   font-size: var(--lx-text-xs);
@@ -443,8 +780,8 @@ async function scrollToBottom() {
   margin-top: var(--lx-space-1);
   padding: var(--lx-space-2) var(--lx-space-3);
   background: var(--lx-green-light-9);
-  border-left: 3px solid var(--lx-green);
-  border-radius: var(--lx-radius-sm);
+  border-left: 2px solid var(--lx-green);
+  border-radius: 0 var(--lx-radius-sm) var(--lx-radius-sm) 0;
 }
 .step-item {
   display: flex;
@@ -459,7 +796,7 @@ async function scrollToBottom() {
   color: var(--lx-text-regular);
 }
 
-/* 澄清/常用提问 chips：细边框胶囊，hover 染绿 */
+/* 澄清 chips：细边框胶囊，hover 染绿 */
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -497,12 +834,13 @@ async function scrollToBottom() {
   text-decoration: underline;
 }
 
-/* 输入栏 */
+/* ---------- 输入栏 ---------- */
 .input-bar {
   display: flex;
   gap: var(--lx-space-2);
-  padding-top: var(--lx-space-3);
+  padding: var(--lx-space-3) var(--lx-space-4);
   border-top: 1px solid var(--lx-border-lighter);
+  flex-shrink: 0;
 }
 /* 控制台提示符 ›：mono 主绿，借用 el-input 的 prefix 槽垂直居中 */
 .prompt {
@@ -511,60 +849,131 @@ async function scrollToBottom() {
   font-weight: var(--lx-font-semibold);
   color: var(--lx-green);
 }
+/* 聚焦辉光：输入框获得焦点时一圈主绿微光（状态表达） */
+.input-bar :deep(.el-input__wrapper.is-focus) {
+  box-shadow:
+    0 0 0 1px var(--lx-green) inset,
+    0 0 0 4px var(--lx-green-glow-soft);
+}
 .mic-btn {
   flex-shrink: 0;
 }
 
-/* ---------- 右侧快捷栏：<1024px 收起，保持单栏流式 ---------- */
-.side-col {
+/* ---------- 侧轨共用 ---------- */
+.rail {
   display: none;
+  flex-direction: column;
+  gap: var(--lx-space-4);
+  flex-shrink: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lx-border-strong) transparent;
 }
-@media (min-width: 1024px) {
-  .chat-col {
-    max-width: 760px;
-  }
-  .side-col {
-    display: flex;
-    flex-direction: column;
-    gap: var(--lx-space-4);
-    width: 280px;
-    flex-shrink: 0;
-  }
-}
-.side-card {
+.rail-sec {
   background: var(--lx-bg-surface);
   border: 1px solid var(--lx-border-light);
   border-radius: var(--lx-radius-md);
-  padding: var(--lx-space-4);
+  padding: var(--lx-space-3) var(--lx-space-3);
 }
-.side-title {
+.sec-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   font-size: var(--lx-text-xs);
   font-weight: var(--lx-font-medium);
   color: var(--lx-text-secondary);
-  margin-bottom: var(--lx-space-3);
+  margin-bottom: var(--lx-space-2);
 }
 /* mono 功能标签：真实计数（Linear 的 FIG/ENG 式标注），不贴假数字 */
-.title-tag {
+.sec-tag {
   letter-spacing: 0.1em;
   color: var(--lx-text-placeholder);
 }
+
+/* 能力矩阵行：无容器嵌套，发线分隔 */
+.cap-row {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-3);
+  width: 100%;
+  padding: var(--lx-space-3) var(--lx-space-1);
+  border: none;
+  border-bottom: 1px solid var(--lx-border-lighter);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.cap-row:last-of-type {
+  border-bottom: none;
+}
+.cap-code {
+  font-size: var(--lx-text-xs);
+  font-weight: var(--lx-font-semibold);
+  letter-spacing: 0.08em;
+  color: var(--lx-green);
+  flex-shrink: 0;
+}
+.cap-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cap-name {
+  font-size: var(--lx-text-base);
+  font-weight: var(--lx-font-medium);
+  color: var(--lx-text-primary);
+  line-height: var(--lx-leading-tight);
+}
+.cap-desc {
+  margin-top: 2px;
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  line-height: var(--lx-leading-tight);
+}
+.cap-row:hover {
+  background: var(--lx-green-light-9);
+}
+
+/* 系统状态行：label 左、mono 读数右 */
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: var(--lx-space-2) var(--lx-space-1);
+  border-bottom: 1px solid var(--lx-border-lighter);
+}
+.stat-row:last-child {
+  border-bottom: none;
+}
+.stat-label {
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+}
+.stat-val {
+  font-size: var(--lx-text-sm);
+  font-weight: var(--lx-font-medium);
+  color: var(--lx-text-primary);
+}
+
+/* 用户读数 */
 .user-name {
   font-size: var(--lx-text-md);
   font-weight: var(--lx-font-semibold);
   color: var(--lx-text-primary);
   line-height: var(--lx-leading-tight);
+  padding: 0 var(--lx-space-1);
 }
 .user-id {
   font-size: var(--lx-text-xs);
   color: var(--lx-text-secondary);
   margin-top: var(--lx-space-1);
+  padding: 0 var(--lx-space-1);
 }
-/* 在借件数读数：细发线之上，大号 mono 数字 + 小号 mono 单位标签 */
 .readout {
-  margin-top: var(--lx-space-3);
+  margin: var(--lx-space-3) var(--lx-space-1) 0;
   padding-top: var(--lx-space-3);
   border-top: 1px solid var(--lx-border-lighter);
 }
@@ -580,25 +989,139 @@ async function scrollToBottom() {
   letter-spacing: 0.08em;
   color: var(--lx-text-secondary);
 }
-.side-link {
-  display: block;
-  padding: var(--lx-space-2) var(--lx-space-3);
-  border-radius: var(--lx-radius-base);
-  font-size: var(--lx-text-base);
-  color: var(--lx-text-regular);
+
+/* 物料精选行：缩略图 + 名称/编号 + 库存状态点 */
+.mat-row {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-3);
+  padding: var(--lx-space-2) var(--lx-space-1);
+  border-bottom: 1px solid var(--lx-border-lighter);
   text-decoration: none;
-  transition:
-    color var(--lx-duration-fast) var(--lx-ease-out),
-    background-color var(--lx-duration-fast) var(--lx-ease-out);
+  transition: background-color var(--lx-duration-fast) var(--lx-ease-out);
 }
-.side-link:hover {
+.mat-row:last-of-type {
+  border-bottom: none;
+}
+.mat-row:hover {
   background: var(--lx-bg-hover);
-  color: var(--lx-green);
 }
-.side-chips {
+.mat-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--lx-radius-base);
+  border: 1px solid var(--lx-border-light);
+  flex-shrink: 0;
+  --mimg-fs: var(--lx-text-md);
+}
+.mat-body {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: var(--lx-space-2);
+}
+.mat-name {
+  font-size: var(--lx-text-sm);
+  font-weight: var(--lx-font-medium);
+  color: var(--lx-text-primary);
+  line-height: var(--lx-leading-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mat-meta {
+  margin-top: 2px;
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-placeholder);
+}
+.mat-stock {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lx-space-1);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-green);
+  flex-shrink: 0;
+}
+.stock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lx-green);
+  box-shadow: 0 0 0 0 var(--lx-green-glow);
+  animation: led-pulse 1.6s ease-in-out infinite;
+}
+.mat-stock.empty {
+  color: var(--lx-text-placeholder);
+}
+.mat-stock.empty .stock-dot {
+  background: var(--lx-text-disabled);
+  animation: none;
+  box-shadow: none;
+}
+.mat-empty {
+  padding: var(--lx-space-3) var(--lx-space-1);
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
+}
+
+/* 快捷功能行 */
+.qlink {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-3);
+  padding: var(--lx-space-2) var(--lx-space-1);
+  border-bottom: 1px solid var(--lx-border-lighter);
+  text-decoration: none;
+  transition: background-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.qlink:last-child {
+  border-bottom: none;
+}
+.qlink:hover {
+  background: var(--lx-green-light-9);
+}
+.q-idx {
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
+}
+.qlink:hover .q-idx {
+  color: var(--lx-green);
+}
+.q-label {
+  flex: 1;
+  font-size: var(--lx-text-base);
+  color: var(--lx-text-regular);
+}
+
+/* ---------- 响应式 ---------- */
+@media (min-width: 1024px) {
+  .rail-right {
+    display: flex;
+    width: 288px;
+  }
+}
+@media (min-width: 1280px) {
+  .rail-left {
+    display: flex;
+    width: 248px;
+  }
+}
+@media (max-width: 1023px) {
+  .deck {
+    flex-direction: column;
+    height: auto;
+  }
+  .console {
+    order: -1;
+    height: calc(100vh - 170px);
+    flex: none;
+  }
+  .rail {
+    display: flex;
+    width: 100%;
+    overflow: visible;
+  }
 }
 </style>
