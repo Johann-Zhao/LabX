@@ -38,10 +38,10 @@ onMounted(async () => {
       <el-card shadow="never">
         <div class="head">
           <span class="title">{{ card.title }}</span>
-          <el-tag size="small" type="success">{{ TYPE_TEXT[card.card_type] || card.card_type }}</el-tag>
+          <el-tag size="small" type="success" class="type-tag">{{ TYPE_TEXT[card.card_type] || card.card_type }}</el-tag>
         </div>
         <div class="meta" @click="router.push(`/materials/${card.material_id}`)">
-          所属物料：{{ card.material_id }} →
+          所属物料：<span class="lx-num">{{ card.material_id }}</span> →
         </div>
 
         <ol v-if="card.points?.length" class="points">
@@ -63,88 +63,107 @@ onMounted(async () => {
 .head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: var(--lx-space-2);
+}
+.type-tag {
+  flex-shrink: 0;
 }
 .title {
-  font-size: 18px;
-  font-weight: bold;
+  font-size: var(--lx-text-lg);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-text-primary);
+  line-height: var(--lx-leading-tight);
 }
+/* 所属物料：链接语义，主绿 + hover 下划线 */
 .meta {
-  color: #42b883;
-  font-size: 12px;
-  margin-top: 4px;
+  display: inline-block;
+  color: var(--lx-green);
+  font-size: var(--lx-text-xs);
+  margin-top: var(--lx-space-1);
   cursor: pointer;
 }
+.meta:hover {
+  text-decoration: underline;
+}
+/* 三要点：浅绿底区块，与正文拉开层级 */
 .points {
-  background: #f0f9eb;
-  border-radius: 8px;
-  padding: 10px 10px 10px 28px;
-  margin: 12px 0;
+  background: var(--lx-green-light-9);
+  border-radius: var(--lx-radius-md);
+  padding: var(--lx-space-3) var(--lx-space-3) var(--lx-space-3) var(--lx-space-6);
+  margin: var(--lx-space-3) 0;
 }
 .points li {
-  margin: 4px 0;
-  font-size: 14px;
+  margin: var(--lx-space-1) 0;
+  font-size: var(--lx-text-base);
+  color: var(--lx-text-regular);
 }
+/* markdown 正文：标题落字阶，表格/代码走细边框 + 浅底 */
 .content {
-  font-size: 14px;
-  line-height: 1.8;
+  font-size: var(--lx-text-base);
+  line-height: var(--lx-leading);
+  color: var(--lx-text-regular);
 }
 .content :deep(h2) {
-  font-size: 16px;
-  margin: 16px 0 8px;
+  font-size: var(--lx-text-lg);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-text-primary);
+  margin: var(--lx-space-4) 0 var(--lx-space-2);
 }
 .content :deep(h3) {
-  font-size: 15px;
-  margin: 14px 0 6px;
+  font-size: var(--lx-text-md);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-text-primary);
+  margin: var(--lx-space-3) 0 var(--lx-space-1);
 }
 .content :deep(table) {
   border-collapse: collapse;
   width: 100%;
-  margin: 8px 0;
-  font-size: 13px;
+  margin: var(--lx-space-2) 0;
+  font-size: var(--lx-text-sm);
 }
 .content :deep(th),
 .content :deep(td) {
-  border: 1px solid #ebeef5;
-  padding: 6px 8px;
+  border: 1px solid var(--lx-border-light);
+  padding: var(--lx-space-1) var(--lx-space-2);
   text-align: left;
 }
 .content :deep(th) {
-  background: #f5f7fa;
+  background: var(--lx-bg-subtle);
 }
 .content :deep(pre) {
-  background: #282c34;
-  color: #abb2bf;
-  padding: 12px;
-  border-radius: 8px;
+  background: var(--lx-bg-subtle);
+  border: 1px solid var(--lx-border-light);
+  color: var(--lx-text-regular);
+  padding: var(--lx-space-3);
+  border-radius: var(--lx-radius-md);
   overflow-x: auto;
-  font-size: 12px;
+  font-size: var(--lx-text-xs);
 }
 .content :deep(code) {
-  font-family: Consolas, Monaco, monospace;
+  font-family: var(--lx-font-mono);
 }
 .content :deep(p code),
 .content :deep(li code),
 .content :deep(td code) {
-  background: #f5f7fa;
-  color: #c7254e;
-  padding: 1px 4px;
-  border-radius: 4px;
+  background: var(--lx-bg-subtle);
+  color: var(--lx-text-primary);
+  padding: 0 var(--lx-space-1);
+  border-radius: var(--lx-radius-sm);
 }
 .source {
-  margin-top: 16px;
-  padding-top: 10px;
-  border-top: 1px dashed #ebeef5;
-  font-size: 12px;
-  color: #909399;
+  margin-top: var(--lx-space-4);
+  padding-top: var(--lx-space-3);
+  border-top: 1px dashed var(--lx-border);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
   word-break: break-all;
 }
 .source a {
-  color: #42b883;
+  color: var(--lx-green);
 }
 .back {
   width: 100%;
-  margin-top: 12px;
+  margin-top: var(--lx-space-3);
 }
 </style>

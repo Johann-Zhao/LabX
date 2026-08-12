@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { borrowMaterial, fetchMaterial } from '../api'
 import { currentUser, lastBorrowResult } from '../store'
 import BorrowDialog from '../components/BorrowDialog.vue'
+import MaterialImage from '../components/MaterialImage.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,42 +100,60 @@ async function doBorrow(safetyConfirmed) {
 </script>
 
 <template>
-  <div v-loading="loading">
+  <div v-loading="loading" class="detail">
     <template v-if="material">
-      <el-card>
-        <div class="row">
-          <span class="name">{{ material.name }}</span>
-          <el-tag :type="LEVEL_TYPE[material.access_level]">
-            {{ LEVEL_TEXT[material.access_level] || material.access_level }}
-          </el-tag>
-        </div>
-        <div class="meta">{{ material.material_id }} · {{ material.model || '无型号' }} · {{ material.category }}</div>
-        <p class="desc">{{ material.description }}</p>
-        <el-descriptions :column="1" border size="small">
-          <el-descriptions-item label="存放位置">{{ material.location }}</el-descriptions-item>
-          <el-descriptions-item label="库存">
-            可借 {{ material.available_quantity }} / 共 {{ material.total_quantity }}
-          </el-descriptions-item>
-          <el-descriptions-item label="社区经验">{{ material.tips_count }} 条</el-descriptions-item>
-        </el-descriptions>
+      <!-- 头图区：4:3 裁切区，object-fit contain 配浅色底；图片缺失时降级为首字符占位块 -->
+      <MaterialImage :material-id="material.material_id" :name="material.name" fit="contain" class="hero" />
 
-        <!-- 数字分身知识卡片：点击进入全文页（保姆级教程） -->
-        <div v-if="material.knowledge_cards?.length" class="cards">
-          <div
-            v-for="c in material.knowledge_cards"
-            :key="c.card_id"
-            class="kcard"
-            @click="router.push(`/cards/${c.card_id}`)"
-          >
-            <span>{{ c.title }}</span>
-            <span class="arrow">→</span>
-          </div>
-        </div>
+      <!-- 信息区：名称 → 编号/型号/分类 → 描述 → 关键事实格 -->
+      <div class="head-row">
+        <h1 class="name">{{ material.name }}</h1>
+        <el-tag :type="LEVEL_TYPE[material.access_level]" class="level-tag">
+          {{ LEVEL_TEXT[material.access_level] || material.access_level }}
+        </el-tag>
+      </div>
+      <div class="meta">
+        <span class="lx-num">{{ material.material_id }}</span> · {{ material.model || '无型号' }} · {{ material.category }}
+      </div>
+      <p class="desc">{{ material.description }}</p>
 
+      <dl class="facts">
+        <div class="fact">
+          <dt>存放位置</dt>
+          <dd>{{ material.location }}</dd>
+        </div>
+        <div class="fact">
+          <dt>库存</dt>
+          <dd>
+            <span :class="['stock', 'lx-num', { empty: material.available_quantity === 0 }]">
+              {{ material.available_quantity === 0 ? '借空' : `可借 ${material.available_quantity} / 共 ${material.total_quantity}` }}
+            </span>
+          </dd>
+        </div>
+        <div class="fact">
+          <dt>社区经验</dt>
+          <dd><span class="lx-num">{{ material.tips_count }}</span> 条</dd>
+        </div>
+      </dl>
+
+      <!-- 数字分身知识卡片：点击进入全文页（保姆级教程） -->
+      <section v-if="material.knowledge_cards?.length" class="cards">
+        <div class="cards-title">知识卡片</div>
+        <div
+          v-for="c in material.knowledge_cards"
+          :key="c.card_id"
+          class="kcard"
+          @click="router.push(`/cards/${c.card_id}`)"
+        >
+          <span>{{ c.title }}</span>
+          <span class="arrow">→</span>
+        </div>
+      </section>
+
+      <div class="actions">
         <el-button
           type="primary"
           size="large"
-          class="borrow-btn"
           :disabled="material.available_quantity === 0"
           :loading="borrowing"
           @click="onBorrow"
@@ -143,12 +162,11 @@ async function doBorrow(safetyConfirmed) {
         </el-button>
         <el-button
           size="large"
-          class="ask-btn"
           @click="router.push({ path: '/', query: { material_id: material.material_id } })"
         >
           问问 AI（该物料专属助教）
         </el-button>
-      </el-card>
+      </div>
 
       <!-- 借期选择：≤30 天直接借出，>30 天填理由转人工审核 -->
       <BorrowDialog v-model="durationDialog" :title="`借用「${material.name}」`" @confirm="onDurationConfirm" />
@@ -169,57 +187,137 @@ async function doBorrow(safetyConfirmed) {
 </template>
 
 <style scoped>
-.row {
+/* 头图区：4:3，宽屏下用 max-height 兜住高度；占位大字随头图放大 */
+.hero {
+  aspect-ratio: 4 / 3;
+  max-height: 340px;
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-md);
+  margin-bottom: var(--lx-space-4);
+  --mimg-fs: var(--lx-text-4xl);
+}
+
+.head-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: var(--lx-space-2);
 }
 .name {
-  font-size: 20px;
-  font-weight: bold;
+  margin: 0;
+  font-size: var(--lx-text-xl);
+  font-weight: var(--lx-font-bold);
+  color: var(--lx-text-primary);
+  line-height: var(--lx-leading-tight);
+}
+.level-tag {
+  flex-shrink: 0;
 }
 .meta {
-  color: #909399;
-  font-size: 12px;
-  margin-top: 4px;
+  color: var(--lx-text-secondary);
+  font-size: var(--lx-text-sm);
+  margin-top: var(--lx-space-1);
 }
 .desc {
-  color: #606266;
-  margin: 12px 0;
+  color: var(--lx-text-regular);
+  font-size: var(--lx-text-base);
+  margin: var(--lx-space-3) 0 0;
 }
+
+/* 关键事实：浅色内嵌区块里的自适应网格，不堆边框线 */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--lx-space-3);
+  margin: var(--lx-space-4) 0 0;
+  padding: var(--lx-space-3) var(--lx-space-4);
+  background: var(--lx-bg-subtle);
+  border-radius: var(--lx-radius-md);
+}
+.fact dt {
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  margin-bottom: var(--lx-space-1);
+}
+.fact dd {
+  margin: 0;
+  font-size: var(--lx-text-base);
+  color: var(--lx-text-primary);
+  font-weight: var(--lx-font-medium);
+}
+/* 库存状态标签：与列表页同一套令牌样式 */
+.stock {
+  font-size: var(--lx-text-xs);
+  font-weight: var(--lx-font-medium);
+  padding: var(--lx-space-1) var(--lx-space-2);
+  border-radius: var(--lx-radius-sm);
+  color: var(--lx-success);
+  background: var(--lx-green-light-9);
+  white-space: nowrap;
+}
+.stock.empty {
+  color: var(--lx-danger);
+  background: var(--lx-danger-bg);
+}
+
+/* 知识卡片列表 */
 .cards {
-  margin-top: 12px;
+  margin-top: var(--lx-space-5);
+}
+.cards-title {
+  font-size: var(--lx-text-sm);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-text-secondary);
+  margin-bottom: var(--lx-space-2);
 }
 .kcard {
-  padding: 8px;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  margin-bottom: 6px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--lx-space-2);
+  padding: var(--lx-space-2) var(--lx-space-3);
+  margin-bottom: var(--lx-space-2);
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-base);
   cursor: pointer;
+  font-size: var(--lx-text-base);
+  color: var(--lx-text-regular);
+  transition:
+    border-color var(--lx-duration-fast) var(--lx-ease-out),
+    background-color var(--lx-duration-fast) var(--lx-ease-out);
 }
 .kcard:hover {
-  border-color: #42b883;
+  border-color: var(--lx-green-light-3);
+  background: var(--lx-green-light-9);
 }
 .kcard .arrow {
-  color: #42b883;
+  color: var(--lx-green);
 }
-.borrow-btn {
-  width: 100%;
-  margin-top: 16px;
+
+/* 操作区：窄屏竖排全宽，≥640px 横排均分 */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lx-space-2);
+  margin-top: var(--lx-space-5);
 }
-.ask-btn {
-  width: 100%;
-  margin-top: 8px;
+.actions .el-button {
   margin-left: 0;
 }
+@media (min-width: 640px) {
+  .actions {
+    flex-direction: row;
+  }
+  .actions .el-button {
+    flex: 1;
+  }
+}
+
 .safety-text {
   white-space: pre-wrap;
-  color: #606266;
-  font-size: 14px;
-  line-height: 1.8;
-  margin: 0 0 12px;
+  color: var(--lx-text-regular);
+  font-size: var(--lx-text-base);
+  line-height: var(--lx-leading);
+  margin: 0 0 var(--lx-space-3);
 }
 </style>

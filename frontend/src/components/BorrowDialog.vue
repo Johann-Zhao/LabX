@@ -48,7 +48,8 @@ function onConfirm() {
       <el-radio v-for="d in PRESETS" :key="d" :value="String(d)">{{ d }} 天</el-radio>
       <el-radio value="more">更久…</el-radio>
     </el-radio-group>
-    <template v-if="needReason">
+    <!-- 超期借用区：警告色底 + 左侧警示条，提示"要审核"这件事 -->
+    <div v-if="needReason" class="more-box">
       <div class="row">
         <span>借用天数</span>
         <el-input-number v-model="customDays" :min="31" :max="180" size="small" />
@@ -60,7 +61,7 @@ function onConfirm() {
         :rows="3"
         placeholder="申请理由（如：课程设计/竞赛项目需要长期使用），将提交管理员审核"
       />
-    </template>
+    </div>
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
       <el-button type="primary" @click="onConfirm">确认</el-button>
@@ -69,25 +70,45 @@ function onConfirm() {
 </template>
 
 <style scoped>
+/* 规则提示：浅色内嵌条，不抢主操作 */
 .tip {
-  color: #909399;
-  font-size: 12px;
-  margin: 0 0 10px;
+  background: var(--lx-bg-subtle);
+  border-radius: var(--lx-radius-sm);
+  padding: var(--lx-space-2) var(--lx-space-3);
+  color: var(--lx-text-secondary);
+  font-size: var(--lx-text-xs);
+  line-height: var(--lx-leading);
+  margin: 0 0 var(--lx-space-3);
 }
 .choices {
   display: flex;
-  gap: 4px;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: var(--lx-space-2) var(--lx-space-4);
+  margin-bottom: var(--lx-space-3);
+}
+/* flex 布局下用 gap 控距，清掉单选默认的右边距 */
+.choices :deep(.el-radio) {
+  margin-right: 0;
+}
+/* 超期区：警告令牌色（浅琥珀底 + 左侧警示条） */
+.more-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lx-space-2);
+  background: var(--lx-warning-bg);
+  border-left: 3px solid var(--lx-warning);
+  border-radius: var(--lx-radius-sm);
+  padding: var(--lx-space-3);
 }
 .row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 13px;
+  gap: var(--lx-space-2);
+  font-size: var(--lx-text-sm);
+  color: var(--lx-text-regular);
 }
 .hint {
-  color: #c0c4cc;
-  font-size: 12px;
+  color: var(--lx-text-placeholder);
+  font-size: var(--lx-text-xs);
 }
 </style>

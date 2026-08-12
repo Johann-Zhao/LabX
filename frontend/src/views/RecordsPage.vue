@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchRecords, returnMaterial, submitExperience } from '../api'
 import { currentUser } from '../store'
@@ -21,6 +21,18 @@ const STATUS_META = {
   pending: { text: '审核中', type: 'warning' },
   rejected: { text: '已驳回', type: 'info' },
 }
+
+// 记录按状态分组：待归还（含逾期）→ 审核中 → 历史记录；组内沿用接口返回顺序
+const GROUP_DEFS = [
+  { key: 'borrowing', title: '待归还', statuses: ['active', 'overdue'] },
+  { key: 'pending', title: '审核中', statuses: ['pending'] },
+  { key: 'history', title: '历史记录', statuses: ['returned', 'rejected'] },
+]
+const grouped = computed(() =>
+  GROUP_DEFS.map((g) => ({ ...g, items: records.value.filter((r) => g.statuses.includes(r.status)) })).filter(
+    (g) => g.items.length > 0
+  )
+)
 
 function fmt(iso) {
   // ISO 字符串 → 'MM-DD HH:mm'，空值显示 —
@@ -102,33 +114,45 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-loading="loading" class="list">
-    <el-card v-for="r in records" :key="r.record_id" class="card" shadow="never">
-      <div class="row">
-        <span class="name">{{ r.material_name }}<template v-if="r.quantity > 1"> ×{{ r.quantity }}</template></span>
-        <el-tag :type="STATUS_META[r.status]?.type || 'info'" size="small">
-          {{ STATUS_META[r.status]?.text || r.status }}
-        </el-tag>
+  <div v-loading="loading">
+    <!-- 按状态分组的记录卡片：待归还 → 审核中 → 历史记录 -->
+    <section v-for="g in grouped" :key="g.key" class="group">
+      <div class="group-title">
+        {{ g.title }} <span class="group-count lx-num">{{ g.items.length }}</span>
       </div>
-      <div class="meta">{{ r.record_id }} · {{ r.material_id }}</div>
-      <div class="times">
-        <span>借出 {{ fmt(r.borrowed_at) }}</span>
-        <span>应还 {{ fmt(r.due_at) }}</span>
-        <span v-if="r.returned_at">实还 {{ fmt(r.returned_at) }}</span>
+      <div class="cards">
+        <article v-for="r in g.items" :key="r.record_id" class="card">
+          <div class="row">
+            <span class="name">
+              {{ r.material_name }}<template v-if="r.quantity > 1"> <span class="lx-num">×{{ r.quantity }}</span></template>
+            </span>
+            <el-tag :type="STATUS_META[r.status]?.type || 'info'" size="small" class="status-tag">
+              {{ STATUS_META[r.status]?.text || r.status }}
+            </el-tag>
+          </div>
+          <div class="meta lx-num">{{ r.record_id }} · {{ r.material_id }}</div>
+          <!-- 时间行：等宽数字；逾期的应还时间用危险色 -->
+          <div class="times">
+            <span class="time">借出 <span class="lx-num">{{ fmt(r.borrowed_at) }}</span></span>
+            <span :class="['time', { danger: r.status === 'overdue' }]">应还 <span class="lx-num">{{ fmt(r.due_at) }}</span></span>
+            <span v-if="r.returned_at" class="time">实还 <span class="lx-num">{{ fmt(r.returned_at) }}</span></span>
+          </div>
+          <div v-if="r.review_reason" class="reason">申请理由：{{ r.review_reason }}</div>
+          <div v-if="r.status === 'active' || r.status === 'overdue'" class="foot">
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              :loading="returningId === r.record_id"
+              @click="onReturn(r)"
+            >
+              归还
+            </el-button>
+          </div>
+        </article>
       </div>
-      <div v-if="r.review_reason" class="reason">申请理由：{{ r.review_reason }}</div>
-      <el-button
-        v-if="r.status === 'active' || r.status === 'overdue'"
-        type="primary"
-        plain
-        size="small"
-        class="btn"
-        :loading="returningId === r.record_id"
-        @click="onReturn(r)"
-      >
-        归还
-      </el-button>
-    </el-card>
+    </section>
+
     <el-empty v-if="!loading && records.length === 0" description="还没有借用记录">
       <el-button type="primary" @click="$router.push('/materials')">去借一件</el-button>
     </el-empty>
@@ -146,43 +170,83 @@ onMounted(load)
 </template>
 
 <style scoped>
-.list {
+.group {
+  margin-bottom: var(--lx-space-5);
+}
+.group-title {
+  font-size: var(--lx-text-sm);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-text-secondary);
+  margin-bottom: var(--lx-space-2);
+}
+.group-count {
+  color: var(--lx-text-placeholder);
+  font-weight: var(--lx-font-regular);
+  margin-left: var(--lx-space-1);
+}
+.cards {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--lx-space-3);
+}
+
+/* 记录卡片：细边框分组，不用阴影 */
+.card {
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-md);
+  padding: var(--lx-space-3) var(--lx-space-4);
 }
 .row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: var(--lx-space-2);
+}
+.status-tag {
+  flex-shrink: 0;
 }
 .name {
-  font-size: 16px;
-  font-weight: bold;
+  font-size: var(--lx-text-md);
+  font-weight: var(--lx-font-semibold);
+  color: var(--lx-text-primary);
+  line-height: var(--lx-leading-tight);
 }
 .meta {
-  color: #909399;
-  font-size: 12px;
-  margin-top: 4px;
+  color: var(--lx-text-secondary);
+  font-size: var(--lx-text-xs);
+  margin-top: var(--lx-space-1);
 }
+/* 时间行：窄屏自动换行；逾期应还整行染危险色 */
 .times {
   display: flex;
-  gap: 12px;
-  color: #606266;
-  font-size: 13px;
-  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: var(--lx-space-1) var(--lx-space-4);
+  color: var(--lx-text-regular);
+  font-size: var(--lx-text-sm);
+  margin-top: var(--lx-space-2);
 }
+.time.danger {
+  color: var(--lx-danger);
+  font-weight: var(--lx-font-medium);
+}
+/* 申请理由：浅色内嵌条，与正文拉开层级 */
 .reason {
-  color: #909399;
-  font-size: 12px;
-  margin-top: 6px;
+  background: var(--lx-bg-subtle);
+  border-radius: var(--lx-radius-sm);
+  padding: var(--lx-space-2) var(--lx-space-3);
+  color: var(--lx-text-secondary);
+  font-size: var(--lx-text-xs);
+  margin-top: var(--lx-space-2);
 }
-.btn {
-  margin-top: 10px;
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--lx-space-3);
 }
 .exp-tip {
-  color: #606266;
-  font-size: 13px;
-  margin: 0 0 8px;
+  color: var(--lx-text-secondary);
+  font-size: var(--lx-text-sm);
+  margin: 0 0 var(--lx-space-2);
 }
 </style>
