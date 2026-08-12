@@ -144,7 +144,7 @@ async function doBorrow(safetyConfirmed) {
         <el-button
           size="large"
           class="ask-btn"
-          @click="router.push({ path: '/ask', query: { material_id: material.material_id } })"
+          @click="router.push({ path: '/', query: { material_id: material.material_id } })"
         >
           问问 AI（该物料专属助教）
         </el-button>

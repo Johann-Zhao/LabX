@@ -41,8 +41,8 @@ onMounted(async () => {
     </header>
 
     <nav class="tabs">
-      <router-link to="/" class="tab" exact-active-class="active">物料</router-link>
-      <router-link to="/ask" class="tab" active-class="active">智能助手</router-link>
+      <router-link to="/" class="tab" exact-active-class="active">智能助手</router-link>
+      <router-link to="/materials" class="tab" active-class="active">物料</router-link>
       <router-link to="/records" class="tab" active-class="active">我的借用</router-link>
       <router-link to="/admin" class="tab" active-class="active">管理</router-link>
     </nav>
@@ -59,34 +59,46 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 4px 12px;
+  padding: var(--lx-space-2) var(--lx-space-1) var(--lx-space-3);
 }
 .logo {
-  font-size: 20px;
-  font-weight: bold;
-  color: #42b883;
+  font-size: var(--lx-text-xl);
+  font-weight: var(--lx-font-bold);
+  color: var(--lx-green);
+  line-height: var(--lx-leading-tight);
 }
 .user-switch {
   width: 170px;
 }
 .tabs {
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: var(--lx-space-2);
+  margin-bottom: var(--lx-space-3);
 }
 .tab {
   flex: 1;
   text-align: center;
-  padding: 10px 0;
-  border-radius: 8px;
-  background: #fff;
-  color: #606266;
+  padding: var(--lx-space-2) 0;
+  border: 1px solid var(--lx-border);
+  border-radius: var(--lx-radius-base);
+  background: var(--lx-bg-surface);
+  color: var(--lx-text-regular);
   text-decoration: none;
-  font-size: 14px;
+  font-size: var(--lx-text-base);
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    background-color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.tab:hover {
+  background: var(--lx-bg-hover);
+  border-color: var(--lx-border-strong);
+  color: var(--lx-text-primary);
 }
 .tab.active {
-  background: #42b883;
-  color: #fff;
-  font-weight: bold;
+  background: var(--lx-green);
+  border-color: var(--lx-green);
+  color: var(--lx-bg-surface);
+  font-weight: var(--lx-font-semibold);
 }
 </style>

@@ -34,13 +34,13 @@ const dueText = computed(() => (lastBorrowResult.due_at || '').slice(0, 10))
             </el-button>
           </el-card>
 
-          <el-button type="primary" @click="router.push('/')">再逛逛</el-button>
+          <el-button type="primary" @click="router.push('/materials')">再逛逛</el-button>
           <el-button @click="router.push('/records')">我的借用</el-button>
         </template>
       </el-result>
     </template>
     <el-empty v-else description="还没有借用记录，先去挑一件物料吧">
-      <el-button type="primary" @click="router.push('/')">去看物料</el-button>
+      <el-button type="primary" @click="router.push('/materials')">去看物料</el-button>
     </el-empty>
   </div>
 </template>

@@ -130,7 +130,7 @@ onMounted(load)
       </el-button>
     </el-card>
     <el-empty v-if="!loading && records.length === 0" description="还没有借用记录">
-      <el-button type="primary" @click="$router.push('/')">去借一件</el-button>
+      <el-button type="primary" @click="$router.push('/materials')">去借一件</el-button>
     </el-empty>
 
     <!-- 归还心得：AI 预填草稿，学生改一句话即可发布（非强制） -->

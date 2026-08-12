@@ -118,74 +118,74 @@ async function reserveOne(m, safetyConfirmed, days, reason, needConfirm) {
 
 <style scoped>
 .bom-card {
-  margin-top: 6px;
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 10px;
-  padding: 10px 12px;
+  margin-top: var(--lx-space-2);
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-border);
+  border-radius: var(--lx-radius-md);
+  padding: var(--lx-space-3) var(--lx-space-4);
   min-width: 260px;
 }
 .guess {
-  font-size: 13px;
-  color: #42b883;
-  font-weight: bold;
-  margin-bottom: 6px;
+  font-size: var(--lx-text-sm);
+  color: var(--lx-green);
+  font-weight: var(--lx-font-semibold);
+  margin-bottom: var(--lx-space-2);
 }
 .group {
-  font-size: 12px;
-  color: #606266;
-  font-weight: bold;
-  margin: 8px 0 2px;
-  border-left: 3px solid #42b883;
-  padding-left: 6px;
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-regular);
+  font-weight: var(--lx-font-semibold);
+  margin: var(--lx-space-2) 0 var(--lx-space-1);
+  border-left: 3px solid var(--lx-green);
+  padding-left: var(--lx-space-2);
 }
 .group.buy {
-  border-left-color: #c0c4cc;
+  border-left-color: var(--lx-border-strong);
 }
 .mrow,
 .rrow {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 4px 0;
-  font-size: 13px;
-  gap: 8px;
+  padding: var(--lx-space-1) 0;
+  font-size: var(--lx-text-sm);
+  gap: var(--lx-space-2);
 }
 .buy-row {
-  color: #909399;
+  color: var(--lx-text-secondary);
 }
 .mid {
-  color: #909399;
-  font-size: 11px;
-  margin-left: 4px;
+  color: var(--lx-text-secondary);
+  font-size: var(--lx-text-xs);
+  margin-left: var(--lx-space-1);
 }
 .purpose {
-  color: #b0b6c0;
-  font-size: 11px;
-  margin-left: 4px;
+  color: var(--lx-text-placeholder);
+  font-size: var(--lx-text-xs);
+  margin-left: var(--lx-space-1);
 }
 .skills {
-  margin-top: 6px;
+  margin-top: var(--lx-space-2);
 }
 .skill {
-  margin: 0 4px 4px 0;
+  margin: 0 var(--lx-space-1) var(--lx-space-1) 0;
 }
 .reserve-btn {
   width: 100%;
-  margin-top: 8px;
+  margin-top: var(--lx-space-3);
 }
 .ok {
-  color: #42b883;
+  color: var(--lx-success);
 }
 .pending {
-  color: #e6a23c;
+  color: var(--lx-warning);
 }
 .fail {
-  color: #f56c6c;
+  color: var(--lx-danger);
 }
 .hint {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 6px;
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  margin-top: var(--lx-space-2);
 }
 </style>
