@@ -18,7 +18,7 @@ const durationDialog = ref(false)
 const borrowDays = ref(30)
 const borrowReason = ref('')
 
-const LEVEL_TYPE = { basic: 'success', advanced: 'warning', professional: 'danger' }
+const LEVEL_CODE = { basic: 'BASIC', advanced: 'ADV', professional: 'PRO' }
 const LEVEL_TEXT = { basic: '基础级', advanced: '进阶级', professional: '专业级' }
 
 // 安全确认弹窗（进阶级物料首次借用，1002）
@@ -101,9 +101,10 @@ async function doBorrow(safetyConfirmed) {
       <!-- 信息区：名称 → 编号/型号/分类 → 描述 → 关键事实格 -->
       <div class="head-row">
         <h1 class="name">{{ material.name }}</h1>
-        <el-tag :type="LEVEL_TYPE[material.access_level]" class="level-tag">
-          {{ LEVEL_TEXT[material.access_level] || material.access_level }}
-        </el-tag>
+        <span :class="['level-badge', 'lv-' + material.access_level]">
+          <span class="level-code lx-num">{{ LEVEL_CODE[material.access_level] || material.access_level }}</span>
+          <span class="level-zh">{{ LEVEL_TEXT[material.access_level] || material.access_level }}</span>
+        </span>
       </div>
       <div class="meta">
         <span class="lx-num">{{ material.material_id }}</span> · {{ material.model || '无型号' }} · {{ material.category }}
@@ -151,6 +152,7 @@ async function doBorrow(safetyConfirmed) {
         <el-button
           type="primary"
           size="large"
+          class="act-borrow"
           :disabled="material.available_quantity === 0"
           :loading="borrowing"
           @click="onBorrow"
@@ -159,9 +161,11 @@ async function doBorrow(safetyConfirmed) {
         </el-button>
         <el-button
           size="large"
+          plain
+          class="act-ask"
           @click="router.push({ path: '/', query: { material_id: material.material_id } })"
         >
-          问问 AI（该物料专属助教）
+          问问 AI
         </el-button>
       </div>
 
@@ -207,8 +211,39 @@ async function doBorrow(safetyConfirmed) {
   color: var(--lx-text-primary);
   line-height: var(--lx-leading-tight);
 }
-.level-tag {
+/* 等级徽标：与列表页同款双段式（mono 代码 + 中文），颜色走语义派生令牌 */
+.level-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lx-space-1);
   flex-shrink: 0;
+  font-size: var(--lx-text-xs);
+  align-self: center;
+}
+.level-code {
+  padding: 0 var(--lx-space-1);
+  border: 1px solid;
+  border-radius: 3px;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+}
+.level-zh {
+  color: var(--lx-text-secondary);
+}
+.lv-basic .level-code {
+  color: var(--lx-green);
+  background: var(--lx-green-light-9);
+  border-color: var(--lx-green-light-8);
+}
+.lv-advanced .level-code {
+  color: var(--lx-warning);
+  background: var(--lx-warning-bg);
+  border-color: var(--el-color-warning-light-7);
+}
+.lv-professional .level-code {
+  color: var(--lx-danger);
+  background: var(--lx-danger-bg);
+  border-color: var(--el-color-danger-light-7);
 }
 .meta {
   color: var(--lx-text-secondary);
@@ -317,14 +352,19 @@ async function doBorrow(safetyConfirmed) {
 }
 .kcard .arrow {
   color: var(--lx-green);
+  font-family: var(--lx-font-mono);
+  line-height: 1;
+  flex-shrink: 0;
 }
 
-/* 操作区：窄屏竖排全宽，≥640px 横排均分 */
+/* 操作区：主/次两级按钮层级——主操作占 2 份宽度独占强调，次操作占 1 份描边降权 */
 .actions {
   display: flex;
   flex-direction: column;
-  gap: var(--lx-space-2);
+  gap: var(--lx-space-3);
   margin-top: var(--lx-space-5);
+  padding-top: var(--lx-space-4);
+  border-top: 1px solid var(--lx-border-light);
 }
 .actions .el-button {
   margin-left: 0;
@@ -333,7 +373,10 @@ async function doBorrow(safetyConfirmed) {
   .actions {
     flex-direction: row;
   }
-  .actions .el-button {
+  .actions .act-borrow {
+    flex: 2;
+  }
+  .actions .act-ask {
     flex: 1;
   }
 }

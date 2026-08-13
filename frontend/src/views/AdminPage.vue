@@ -108,6 +108,15 @@ async function onReview(r, approve) {
 const users = ref([]) // 借用人候选
 const materials = ref([]) // 全量物料（可借 > 0 的行才可选）
 const batchTableRef = ref() // 物料选择表 ref，提交后清空选择
+const batchKeyword = ref('') // 表格关键字筛选（只影响显示，不影响已勾选）
+// 批量借出表格：按关键字即时过滤（名称/型号/分类），物料多了不用滚半天
+const batchMaterials = computed(() => {
+  const kw = batchKeyword.value.trim().toLowerCase()
+  if (!kw) return materials.value
+  return materials.value.filter((m) =>
+    [m.name, m.model, m.category, m.material_id].some((v) => String(v || '').toLowerCase().includes(kw))
+  )
+})
 const selectedRows = ref([]) // 当前勾选的行（selection-change 回调）
 const qtyMap = ref({}) // material_id → 借几件（默认 1）
 const batchUser = ref('')
@@ -243,7 +252,10 @@ onMounted(async () => {
           :class="{ active: currentView === 'pending' }"
           @click="currentView = 'pending'"
         >
-          审核申请
+          <span class="side-main">
+            <span class="side-idx lx-num">01</span>
+            <span class="side-label">审核申请</span>
+          </span>
           <el-badge
             :value="pendingRecords.length"
             :show-zero="false"
@@ -252,16 +264,28 @@ onMounted(async () => {
           />
         </div>
         <div class="item" :class="{ active: currentView === 'active' }" @click="currentView = 'active'">
-          当前在借
+          <span class="side-main">
+            <span class="side-idx lx-num">02</span>
+            <span class="side-label">当前在借</span>
+          </span>
         </div>
         <div class="item" :class="{ active: currentView === 'records' }" @click="currentView = 'records'">
-          全部流水
+          <span class="side-main">
+            <span class="side-idx lx-num">03</span>
+            <span class="side-label">全部流水</span>
+          </span>
         </div>
         <div class="item" :class="{ active: currentView === 'batch' }" @click="currentView = 'batch'">
-          批量借出
+          <span class="side-main">
+            <span class="side-idx lx-num">04</span>
+            <span class="side-label">批量借出</span>
+          </span>
         </div>
         <div class="item" :class="{ active: currentView === 'create' }" @click="currentView = 'create'">
-          录入物料
+          <span class="side-main">
+            <span class="side-idx lx-num">05</span>
+            <span class="side-label">录入物料</span>
+          </span>
         </div>
       </div>
       <div class="side-foot">
@@ -306,7 +330,9 @@ onMounted(async () => {
           </div>
           <div v-if="r.review_reason" class="reason">申请理由：{{ r.review_reason }}</div>
         </el-card>
-        <el-empty v-if="!loading && pendingRecords.length === 0" description="没有待审核的申请" />
+        <el-empty v-if="!loading && pendingRecords.length === 0" description="没有待审核的申请">
+          <span class="empty-hint">借期超过 30 天的申请会流转到这里，通过后自动起算借期。</span>
+        </el-empty>
       </div>
 
       <!-- 当前在借：物料当前持有人一览 -->
@@ -353,7 +379,9 @@ onMounted(async () => {
             <span v-if="r.returned_at">实还 {{ fmt(r.returned_at) }}</span>
           </div>
         </el-card>
-        <el-empty v-if="!loading && records.length === 0" description="还没有任何借用记录" />
+        <el-empty v-if="!loading && records.length === 0" description="还没有任何借用记录">
+          <span class="empty-hint">可以从左侧「批量借出」代学生借出第一件物料。</span>
+        </el-empty>
       </div>
 
       <!-- 批量借出：管理员代借，逐件走借用状态机 -->
@@ -397,9 +425,16 @@ onMounted(async () => {
         </template>
 
         <div class="table-wrap">
+          <el-input
+            v-model="batchKeyword"
+            placeholder="筛选物料名称 / 型号 / 分类"
+            clearable
+            size="small"
+            class="batch-filter"
+          />
           <el-table
             ref="batchTableRef"
-            :data="materials"
+            :data="batchMaterials"
             stripe
             @selection-change="onSelectionChange"
           >
@@ -535,6 +570,24 @@ onMounted(async () => {
   flex-direction: column;
   gap: var(--lx-space-1);
 }
+.side-main {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-2);
+  min-width: 0;
+}
+/* mono 功能序号：与侧栏文字同级的仪器标注 */
+.side-idx {
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.08em;
+  color: var(--lx-text-placeholder);
+  flex-shrink: 0;
+}
+.side-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .item {
   padding: var(--lx-space-2) var(--lx-space-3);
   border-radius: var(--lx-radius-md);
@@ -554,6 +607,9 @@ onMounted(async () => {
   color: var(--lx-green);
   font-weight: var(--lx-font-bold);
   border-left-color: var(--lx-green); /* 高亮绿色左边条 */
+}
+.item.active .side-idx {
+  color: var(--lx-green);
 }
 .side-badge {
   margin-left: var(--lx-space-2);
@@ -616,6 +672,18 @@ onMounted(async () => {
 }
 .table-wrap {
   margin: var(--lx-space-4) 0;
+}
+/* 批量借出表格筛选框：窄条工具输入，不抢表格焦点 */
+.batch-filter {
+  width: 260px;
+  margin-bottom: var(--lx-space-2);
+}
+/* 空状态引导提示：mono 弱文本，给管理员指路 */
+.empty-hint {
+  display: block;
+  margin-top: var(--lx-space-2);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-placeholder);
 }
 .actions {
   display: flex;

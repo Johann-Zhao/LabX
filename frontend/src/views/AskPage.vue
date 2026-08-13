@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { agentChatStream, askQuestion, fetchMaterial, fetchMaterials, fetchRecords } from '../api'
 import { currentUser } from '../store'
@@ -8,6 +8,7 @@ import BomCard from './BomCard.vue'
 import MaterialImage from '../components/MaterialImage.vue'
 
 const route = useRoute()
+const router = useRouter()
 const materialId = route.query.material_id || null // 从物料详情页进入时带上（数字分身对话窗）
 const materialName = ref('')
 
@@ -49,7 +50,20 @@ const borrowingCount = ref(null)
 
 // 右轨物料精选 + 左轨系统状态：真实接口数据，失败静默降级（对应行显示 —）
 const materials = ref([])
-const showcase = computed(() => materials.value.slice(0, 4))
+// 精选 = 在库优先排序 + 轮换窗口（"换一批"按种子滚动，不是无脑截前 4）
+const showcaseSeed = ref(0)
+const showcase = computed(() => {
+  const ranked = [...materials.value].sort(
+    (a, b) => (b.available_quantity > 0 ? 1 : 0) - (a.available_quantity > 0 ? 1 : 0)
+  )
+  const n = ranked.length
+  if (n <= 4) return ranked
+  const start = showcaseSeed.value % n
+  return Array.from({ length: 4 }, (_, i) => ranked[(start + i) % n])
+})
+function rotateShowcase() {
+  showcaseSeed.value += 1
+}
 const statsTotal = computed(() => (materials.value.length ? materials.value.length : null))
 const statsAvail = computed(() =>
   materials.value.length ? materials.value.reduce((s, m) => s + (m.available_quantity || 0), 0) : null
@@ -197,10 +211,6 @@ async function scrollToBottom() {
           <span class="stat-label">会话</span>
           <span class="stat-val lx-num">{{ convIdShort }}</span>
         </div>
-        <div class="stat-row">
-          <span class="stat-label">本地时间</span>
-          <span class="stat-val lx-num">{{ clock }}</span>
-        </div>
       </section>
     </aside>
 
@@ -293,7 +303,17 @@ async function scrollToBottom() {
           <div v-if="m.refs?.length" class="refs">
             参考：
             <template v-for="r in m.refs" :key="r.card_id || r.url">
-              <el-tag v-if="r.card_id" size="small" class="ref-tag">{{ r.title }}</el-tag>
+              <el-tag
+            v-if="r.card_id"
+            size="small"
+            class="ref-tag"
+            role="link"
+            tabindex="0"
+            @click="router.push(`/cards/${r.card_id}`)"
+            @keyup.enter="router.push(`/cards/${r.card_id}`)"
+          >
+            {{ r.title }}
+          </el-tag>
               <a v-else-if="r.url" :href="r.url" target="_blank" rel="noopener" class="ref-link">{{ r.title }} ↗</a>
             </template>
           </div>
@@ -364,7 +384,17 @@ async function scrollToBottom() {
       <section class="rail-sec">
         <div class="sec-head">
           <span>物料精选</span>
-          <span class="sec-tag lx-num">MAT {{ showcase.length }}</span>
+          <span class="sec-actions">
+            <span class="sec-tag lx-num">MAT {{ showcase.length }}</span>
+            <button
+              v-if="materials.length > 4"
+              type="button"
+              class="rotate-btn lx-num"
+              @click="rotateShowcase"
+            >
+              换一批
+            </button>
+          </span>
         </div>
         <router-link v-for="m in showcase" :key="m.material_id" :to="`/materials/${m.material_id}`" class="mat-row">
           <MaterialImage :material-id="m.material_id" :name="m.name" class="mat-thumb" />
@@ -399,13 +429,14 @@ async function scrollToBottom() {
 /* ==========================================================================
    布局：控制台三栏（deck）
    ≥1280px：左轨 248px + 中对话 + 右轨 288px
-   1024-1279px：中对话 + 右轨（左轨收起，能力入口由欢迎区指令行承担）
+   1024-1279px：左轨收窄到 200px 保留能力矩阵入口 + 中对话 + 右轨 288px
    <1024px：单列，对话在上，两条侧轨沉到下方
    ========================================================================== */
 .deck {
   display: flex;
   gap: var(--lx-space-5);
-  height: calc(100vh - 170px);
+  height: calc(100dvh - 170px);
+  min-height: 520px; /* 小屏笔记本/浏览器栏变化时不被裁死 */
 }
 
 /* ---------- 中央对话控制台 ---------- */
@@ -823,6 +854,11 @@ async function scrollToBottom() {
 }
 .ref-tag {
   margin: var(--lx-space-1) var(--lx-space-1) 0 0;
+  cursor: pointer;
+  transition: border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.ref-tag:hover {
+  border-color: var(--lx-green-light-3);
 }
 .ref-link {
   color: var(--lx-green);
@@ -884,10 +920,33 @@ async function scrollToBottom() {
   color: var(--lx-text-secondary);
   margin-bottom: var(--lx-space-2);
 }
-/* mono 功能标签：真实计数（Linear 的 FIG/ENG 式标注），不贴假数字 */
+/* mono 功能标签：细边框小芯片，与区块标题明确区分（防 CAP/SYS 与标题视觉混淆） */
 .sec-tag {
   letter-spacing: 0.1em;
-  color: var(--lx-text-placeholder);
+  color: var(--lx-text-secondary);
+  padding: 0 var(--lx-space-1);
+  border: 1px solid var(--lx-border-light);
+  border-radius: 3px;
+  line-height: 1.5;
+}
+.sec-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-2);
+}
+/* 换一批：文字级操作按钮，hover 染主绿 */
+.rotate-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.06em;
+  color: var(--lx-text-secondary);
+  cursor: pointer;
+  transition: color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.rotate-btn:hover {
+  color: var(--lx-green);
 }
 
 /* 能力矩阵行：无容器嵌套，发线分隔 */
@@ -1101,10 +1160,13 @@ async function scrollToBottom() {
     display: flex;
     width: 288px;
   }
+  .rail-left {
+    display: flex;
+    width: 200px; /* 1024-1279 档：左轨收窄但保留能力矩阵入口 */
+  }
 }
 @media (min-width: 1280px) {
   .rail-left {
-    display: flex;
     width: 248px;
   }
 }
@@ -1115,7 +1177,8 @@ async function scrollToBottom() {
   }
   .console {
     order: -1;
-    height: calc(100vh - 170px);
+    height: calc(100dvh - 170px);
+    min-height: 420px;
     flex: none;
   }
   .rail {

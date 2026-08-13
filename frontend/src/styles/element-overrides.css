@@ -166,6 +166,68 @@
   border-radius: var(--lx-radius-lg);
 }
 
+/* ==========================================================================
+   第四轮·未来感微升级（角标/辉光/扫描线，全部走 tokens）
+   ========================================================================== */
+
+/* 主按钮：内收仪器角标（.lx-brackets 语言在按钮上的内收版，仅实底样式） */
+.el-button--primary:not(.is-plain) {
+  position: relative;
+}
+.el-button--primary:not(.is-plain)::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--lx-edge-light), var(--lx-edge-light)),
+    linear-gradient(var(--lx-edge-light), var(--lx-edge-light)),
+    linear-gradient(var(--lx-edge-light), var(--lx-edge-light)),
+    linear-gradient(var(--lx-edge-light), var(--lx-edge-light));
+  background-size: 5px 1px, 1px 5px, 5px 1px, 1px 5px;
+  background-position: 0 0, 0 0, 100% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  opacity: 0.85;
+}
+/* 主按钮 hover：辉光环 + 内高光加深，保持"仪器通电"质感 */
+.el-button--primary:not(.is-plain):hover {
+  box-shadow: var(--lx-btn-glow);
+}
+
+/* 输入框/选择器聚焦：底缘扫描线（一次性扫掠，状态表达；prefers-reduced-motion 已全局降级） */
+.el-input__wrapper,
+.el-select__wrapper {
+  position: relative;
+  overflow: hidden;
+}
+.el-input__wrapper::after,
+.el-select__wrapper::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--lx-scan-line) 30%,
+    var(--lx-scan-line) 70%,
+    transparent
+  );
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+.el-input__wrapper.is-focus::after,
+.el-select__wrapper.is-focused::after {
+  animation: lx-input-scan var(--lx-duration-slow) var(--lx-ease-out) forwards;
+}
+@keyframes lx-input-scan {
+  to {
+    transform: translateX(100%);
+  }
+}
+
 /* 键盘焦点：明显但克制的绿描边（Element 组件自身的 focus 样式不受影响） */
 :focus-visible {
   outline: 2px solid var(--lx-green-light-5);

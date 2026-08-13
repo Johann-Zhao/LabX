@@ -98,6 +98,21 @@ body {
   }
 }
 
+/* 路由切换过渡：400ms 淡入上移（规范第 6 节：只动 opacity/transform，ease-out） */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity var(--lx-duration-slow) var(--lx-ease-out),
+    transform var(--lx-duration-slow) var(--lx-ease-out);
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
+}
+
 /* 动效降级：用户系统开"减少动态效果"时，全站动画收敛为瞬时（规范文档第 6 节） */
 @media (prefers-reduced-motion: reduce) {
   *,

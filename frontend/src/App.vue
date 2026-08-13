@@ -69,7 +69,11 @@ onMounted(async () => {
     </nav>
   </template>
 
-  <router-view />
+  <router-view v-slot="{ Component }">
+    <transition name="page" mode="out-in">
+      <component :is="Component" />
+    </transition>
+  </router-view>
 
   <!-- 开屏介绍动画：仅学生端首次访问播放（/admin 永不渲染；组件内部用 localStorage 控仅首次） -->
   <IntroOverlay v-if="!isAdmin" />
@@ -189,7 +193,8 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--lx-space-1) var(--lx-space-2);
+  gap: 2px;
+  padding: var(--lx-space-1) var(--lx-space-3);
   border: 1px solid transparent;
   border-radius: var(--lx-radius-base);
   color: var(--lx-text-secondary);
@@ -217,8 +222,8 @@ onMounted(async () => {
 }
 .tab.active {
   background: var(--lx-bg-surface);
-  border-color: var(--lx-border);
-  box-shadow: var(--lx-shadow-1);
+  border-color: var(--lx-green-light-7);
+  box-shadow: 0 0 0 1px var(--lx-green-light-8), 0 2px 8px var(--lx-green-glow-soft);
   color: var(--lx-green);
   font-weight: var(--lx-font-medium);
 }

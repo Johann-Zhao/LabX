@@ -15,6 +15,23 @@ const choice = ref('30') // '7' | '14' | '30' | 'more'
 const customDays = ref(60)
 const reason = ref('')
 
+// 语义化借期场景：一次点选同时填好天数与理由（>30 天自动转审核）
+const SCENARIOS = [
+  { label: '课程设计', days: 30, reason: '' },
+  { label: '竞赛项目', days: 60, reason: '竞赛项目需要长期使用' },
+  { label: '长期研究', days: 90, reason: '长期研究项目需要连续使用' },
+]
+function applyScenario(s) {
+  if (s.days > 30) {
+    choice.value = 'more'
+    customDays.value = s.days
+    reason.value = s.reason
+  } else {
+    choice.value = String(s.days)
+    reason.value = ''
+  }
+}
+
 const visible = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
@@ -44,6 +61,19 @@ function onConfirm() {
 <template>
   <el-dialog v-model="visible" :title="title" width="90%">
     <div class="tip">一个月以内直接借出；超过一个月需填写理由，人工审核通过后才算借出。</div>
+    <!-- 场景预设：常见用途一次点选（天数+理由一起填好，可再改） -->
+    <div class="scenarios">
+      <span class="sc-label lx-num" aria-hidden="true">SCENE</span>
+      <button
+        v-for="s in SCENARIOS"
+        :key="s.label"
+        type="button"
+        class="sc-chip"
+        @click="applyScenario(s)"
+      >
+        {{ s.label }} · {{ s.days }}天
+      </button>
+    </div>
     <el-radio-group v-model="choice" class="choices">
       <el-radio v-for="d in PRESETS" :key="d" :value="String(d)">{{ d }} 天</el-radio>
       <el-radio value="more">更久…</el-radio>
@@ -79,6 +109,37 @@ function onConfirm() {
   font-size: var(--lx-text-xs);
   line-height: var(--lx-leading);
   margin: 0 0 var(--lx-space-3);
+}
+/* 场景预设行：mono 标注 + 胶囊按钮 */
+.scenarios {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lx-space-2);
+  margin-bottom: var(--lx-space-3);
+}
+.sc-label {
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
+}
+.sc-chip {
+  padding: 2px var(--lx-space-3);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-pill);
+  cursor: pointer;
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out),
+    background-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.sc-chip:hover {
+  color: var(--lx-green);
+  border-color: var(--lx-green-light-5);
+  background: var(--lx-green-light-9);
 }
 .choices {
   display: flex;
