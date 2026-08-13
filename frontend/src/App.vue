@@ -69,11 +69,7 @@ onMounted(async () => {
     </nav>
   </template>
 
-  <router-view v-slot="{ Component }">
-    <transition name="page" mode="out-in">
-      <component :is="Component" />
-    </transition>
-  </router-view>
+  <router-view />
 
   <!-- 开屏介绍动画：仅学生端首次访问播放（/admin 永不渲染；组件内部用 localStorage 控仅首次） -->
   <IntroOverlay v-if="!isAdmin" />

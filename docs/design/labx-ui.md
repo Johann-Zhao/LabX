@@ -235,7 +235,7 @@
 
 - **主按钮内收角标**：`.el-button--primary:not(.is-plain)` 用伪元素画四角内高光（仪器角标语言的按钮内收版），hover 加辉光环；`translateY(1px)` 按压反馈沿用。
 - **输入聚焦扫描线**：输入框/选择器 focus 时底缘 1px 绿线一次性扫过（`lx-input-scan` 400ms ease-out，仅 transform）；替换原 focus 辉光为"扫描 + 辉光"双表达。
-- **路由过渡**：`<transition name="page">` 400ms ease-out 淡入上移 6px（只动 opacity/transform，符合第 6 节）。
+- ~~路由过渡~~：曾尝试 `<transition mode="out-in">` 400ms 淡入，实测在 Vue Router 下切换后页面不挂载（空白），**已回退为无过渡**；待找到稳定方案前不做页面级过渡。
 - **激活 tab 强化**：选中段加主绿描边 + 浅绿辉光（原仅白底，区分度不足）。
 
 ### 11.3 交互与按钮重排
