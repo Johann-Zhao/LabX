@@ -15,6 +15,15 @@ const bare = computed(() => isAdmin.value || isLogin.value)
 
 const users = ref([])
 
+// 主题切换：深色/浅色一键（默认浅色，用户选择存 localStorage）
+const isDark = ref(document.documentElement.dataset.theme === 'dark')
+function toggleTheme() {
+  const next = !isDark.value
+  isDark.value = next
+  document.documentElement.dataset.theme = next ? 'dark' : ''
+  localStorage.setItem('labx_theme', next ? 'dark' : 'light')
+}
+
 function onLogout() {
   logout()
   router.push('/login')
@@ -39,6 +48,14 @@ onMounted(async () => {
         <span class="user-label lx-num" aria-hidden="true">USER</span>
         <span class="user-name">{{ currentUser.name }}</span>
         <span class="role-badge lx-num">{{ currentUser.role === 'admin' ? 'ADMIN' : 'STUDENT' }}</span>
+        <button
+          type="button"
+          class="logout-btn theme-btn"
+          :title="isDark ? '切换到浅色' : '切换到深色'"
+          @click="toggleTheme"
+        >
+          {{ isDark ? '浅色' : '深色' }}
+        </button>
         <button type="button" class="logout-btn" @click="onLogout">退出</button>
       </div>
     </header>
@@ -65,6 +82,26 @@ onMounted(async () => {
       <router-link v-if="currentUser.role === 'admin'" to="/admin" class="tab" active-class="active">
         <span class="tab-zh">管理</span>
         <span class="tab-en lx-num" aria-hidden="true">ADMIN</span>
+      </router-link>
+    </nav>
+
+    <!-- 移动端底部 tab 栏：<768px 常驻底部，单手可达；宽屏隐藏 -->
+    <nav class="mobile-tabs" aria-label="移动端导航">
+      <router-link to="/" class="mtab" exact-active-class="active">
+        <span class="mtab-en lx-num">AGENT</span>
+        <span class="mtab-zh">助手</span>
+      </router-link>
+      <router-link to="/materials" class="mtab" active-class="active">
+        <span class="mtab-en lx-num">MAT</span>
+        <span class="mtab-zh">物料</span>
+      </router-link>
+      <router-link to="/records" class="mtab" active-class="active">
+        <span class="mtab-en lx-num">REC</span>
+        <span class="mtab-zh">借用</span>
+      </router-link>
+      <router-link v-if="currentUser.role === 'admin'" to="/admin" class="mtab" active-class="active">
+        <span class="mtab-en lx-num">ADMIN</span>
+        <span class="mtab-zh">管理</span>
       </router-link>
     </nav>
   </template>
@@ -225,6 +262,48 @@ onMounted(async () => {
 }
 .tab.active .tab-en {
   color: var(--lx-green);
+}
+
+/* ---------- 移动端底部 tab 栏 ---------- */
+.mobile-tabs {
+  display: none;
+}
+@media (max-width: 767px) {
+  .mobile-tabs {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--lx-bg-surface);
+    border-top: 1px solid var(--lx-border-light);
+    box-shadow: 0 -2px 8px rgba(28, 35, 32, 0.04);
+    z-index: var(--lx-z-header);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mtab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: var(--lx-space-1) 0;
+    color: var(--lx-text-secondary);
+    text-decoration: none;
+    font-size: var(--lx-text-xs);
+  }
+  .mtab-en {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--lx-text-placeholder);
+  }
+  .mtab.active {
+    color: var(--lx-green);
+    font-weight: var(--lx-font-medium);
+  }
+  .mtab.active .mtab-en {
+    color: var(--lx-green);
+  }
 }
 
 /* 窄屏：mono 小标与 USER 标注收起，控件不挤 */

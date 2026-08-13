@@ -120,7 +120,50 @@ onMounted(async () => {
   // 非物料模式：不再预置长欢迎气泡，空状态欢迎区由模板渲染
 })
 
-onUnmounted(() => clearInterval(clockTimer))
+// 语音输入：Web Speech API 特性检测，不支持时按钮保留但点击给提示；支持时按住说话转文字
+const SR = typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null
+const speechSupported = !!SR
+const listening = ref(false)
+let recognition = null
+function toggleMic() {
+  if (!speechSupported) {
+    ElMessage.info('当前浏览器不支持语音输入，请用键盘输入')
+    return
+  }
+  if (listening.value) {
+    try { recognition?.stop() } catch { /* 忽略 */ }
+    listening.value = false
+    return
+  }
+  recognition = new SR()
+  recognition.lang = 'zh-CN'
+  recognition.interimResults = false
+  recognition.maxAlternatives = 1
+  recognition.onresult = (e) => {
+    const t = e.results?.[0]?.[0]?.transcript || ''
+    if (t) input.value += (input.value ? ' ' : '') + t
+    listening.value = false
+  }
+  recognition.onerror = () => {
+    listening.value = false
+    ElMessage.warning('语音识别失败（可能需要联网或浏览器授权）')
+  }
+  recognition.onend = () => {
+    listening.value = false
+  }
+  try {
+    recognition.start()
+    listening.value = true
+  } catch {
+    listening.value = false
+    ElMessage.warning('无法启动语音识别')
+  }
+}
+
+onUnmounted(() => {
+  clearInterval(clockTimer)
+  try { recognition?.stop() } catch { /* 忽略 */ }
+})
 
 async function send() {
   const question = input.value.trim()
@@ -340,6 +383,19 @@ async function scrollToBottom() {
         </div>
       </div>
 
+      <!-- ghost 常用提问：对话开始后折叠为输入栏上方一行可横滚的快捷词，防新手迷路 -->
+      <div v-if="messages.length && !thinking" class="ghost-strip">
+        <button
+          v-for="q in SUGGESTIONS"
+          :key="q"
+          type="button"
+          class="ghost-chip"
+          @click="sendText(q)"
+        >
+          {{ q }}
+        </button>
+      </div>
+
       <div class="input-bar">
         <el-input
           v-model="input"
@@ -353,8 +409,16 @@ async function scrollToBottom() {
             <span class="prompt" aria-hidden="true">›</span>
           </template>
         </el-input>
-        <!-- 语音输入占位：功能未上线，仅保留入口位置 -->
-        <el-button class="mic-btn" size="large" disabled title="语音输入即将上线" aria-label="语音输入即将上线">
+        <!-- 语音输入：Web Speech API，特性检测，支持时点击说话转文字 -->
+        <el-button
+          class="mic-btn"
+          :class="{ listening }"
+          size="large"
+          :loading="listening"
+          :title="speechSupported ? '语音输入（点击开始/停止）' : '浏览器不支持语音输入'"
+          :aria-label="speechSupported ? '语音输入' : '浏览器不支持语音输入'"
+          @click="toggleMic"
+        >
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="2" width="6" height="12" rx="3" />
             <path d="M5 10a7 7 0 0 0 14 0" />
@@ -868,6 +932,37 @@ async function scrollToBottom() {
 }
 .ref-link:hover {
   text-decoration: underline;
+}
+
+/* ghost 常用提问：单行胶囊可横滚，隐滚动条 */
+.ghost-strip {
+  display: flex;
+  gap: var(--lx-space-2);
+  overflow-x: auto;
+  padding: var(--lx-space-2) var(--lx-space-3) 0;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.ghost-strip::-webkit-scrollbar {
+  display: none;
+}
+.ghost-chip {
+  flex-shrink: 0;
+  padding: 2px var(--lx-space-3);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  background: var(--lx-bg-subtle);
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.ghost-chip:hover {
+  color: var(--lx-green);
+  border-color: var(--lx-green-light-5);
 }
 
 /* ---------- 输入栏 ---------- */

@@ -28,11 +28,21 @@ const GROUP_DEFS = [
   { key: 'pending', title: '审核中', statuses: ['pending'] },
   { key: 'history', title: '历史记录', statuses: ['returned', 'rejected'] },
 ]
-const grouped = computed(() =>
-  GROUP_DEFS.map((g) => ({ ...g, items: records.value.filter((r) => g.statuses.includes(r.status)) })).filter(
-    (g) => g.items.length > 0
-  )
-)
+// 状态筛选：默认全部，点胶囊只看对应分组
+const FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'borrowing', label: '待归还' },
+  { key: 'pending', label: '审核中' },
+  { key: 'history', label: '历史记录' },
+]
+const filter = ref('all')
+const grouped = computed(() => {
+  const groups = GROUP_DEFS.map((g) => ({
+    ...g,
+    items: records.value.filter((r) => g.statuses.includes(r.status)),
+  })).filter((g) => g.items.length > 0)
+  return filter.value === 'all' ? groups : groups.filter((g) => g.key === filter.value)
+})
 
 function fmt(iso) {
   // ISO 字符串 → 'MM-DD HH:mm'，空值显示 —
@@ -115,6 +125,20 @@ onMounted(load)
 
 <template>
   <div v-loading="loading">
+    <!-- 状态筛选胶囊：默认全部，点选只看对应分组 -->
+    <div class="filter-chips">
+      <button
+        v-for="f in FILTERS"
+        :key="f.key"
+        type="button"
+        class="fchip lx-num"
+        :class="{ active: filter === f.key }"
+        @click="filter = f.key"
+      >
+        {{ f.label }}
+      </button>
+    </div>
+
     <!-- 按状态分组的记录卡片：待归还 → 审核中 → 历史记录 -->
     <section v-for="g in grouped" :key="g.key" class="group">
       <div class="group-title">
@@ -170,6 +194,37 @@ onMounted(load)
 </template>
 
 <style scoped>
+/* 筛选胶囊：与物料页同一套仪器分段语言 */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lx-space-2);
+  margin-bottom: var(--lx-space-4);
+}
+.fchip {
+  padding: 2px var(--lx-space-3);
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.04em;
+  color: var(--lx-text-secondary);
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-pill);
+  cursor: pointer;
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    background-color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.fchip:hover {
+  color: var(--lx-text-primary);
+  border-color: var(--lx-border-strong);
+}
+.fchip.active {
+  color: var(--lx-green);
+  background: var(--lx-green-light-9);
+  border-color: var(--lx-green-light-7);
+  font-weight: var(--lx-font-medium);
+}
 .group {
   margin-bottom: var(--lx-space-5);
 }

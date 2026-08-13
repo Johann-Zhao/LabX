@@ -256,3 +256,15 @@
 - 骨架屏呼吸属于 loading 状态表达（豁免条款 1 同类）；所有新动画只动 transform/opacity/颜色，时长 150-400ms ease-out。
 - 场景预设/序号/chips 全部承载真实数据与操作，无装饰性标注。
 - 开发环境：`vite.config.js` 的 `server.watch` 改 `usePolling: true`（Windows 下原生 fs watcher 遇 AI 编辑工具的原子写会 EBUSY 崩溃，轮询监听为工程稳定性项，不影响产物）。
+
+## 12. 第五轮：深色主题 / 移动端 tab / 筛选与语音（2026-08-13）
+
+在第四轮基础上补齐五项：
+
+- **深色主题一键切换**：`main.js` 启动时尽早应用（用户选择 `labx_theme` → 跟随系统 → 默认浅色），顶栏"深色/浅色"文字按钮切换；`element-overrides.css` 新增 `[data-theme='dark']` 全量 `--el-*` 深色映射（主绿提亮 `#5d9a7b`，表面 `#171e1a`，页底 `#101613`），与 tokens.css 深色副本联动。**主基调仍是浅色**（用户明确要求），深色只是可选项。
+- **移动端底部 tab 栏**：<768px 常驻底部三/四项（AGENT/MAT/REC[/ADMIN]），mono 小标+中文双行，`env(safe-area-inset-bottom)` 适配刘海屏；`#app` 移动端 padding-bottom 96px 防遮挡。
+- **记录页状态筛选**：胶囊 chips（全部/待归还/审核中/历史记录），与物料页分类 chips 同一语言。
+- **语音输入**：Web Speech API 特性检测（`SpeechRecognition || webkitSpeechRecognition`），支持时点击开始/停止转文字（zh-CN，结果追加到输入框），不支持/失败时提示降级；无新依赖。
+- **对话 ghost chips**：对话开始后（有消息且非思考中）输入栏上方出现一行可横滚的常用提问胶囊，点即发送，防新手迷路。
+
+> 说明：深色主题按钮文案用"深色/浅色"两字词，无 emoji、无图标库，与顶栏退出按钮同款描边语言。

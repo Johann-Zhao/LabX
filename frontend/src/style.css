@@ -84,6 +84,12 @@ body {
   margin: 0 auto;
   padding: 12px 12px 64px;
 }
+/* 移动端底部 tab 栏常驻，内容区多留 32px 避免被遮挡 */
+@media (max-width: 767px) {
+  #app {
+    padding-bottom: 96px;
+  }
+}
 
 @media (min-width: 768px) {
   #app {
