@@ -85,6 +85,7 @@ cd frontend && npm run dev        # http://localhost:5173，/api 由 vite proxy 
 - [x] 登录认证：users 表加 `password_hash`/`role`（sha256+固定盐，演示级，见 `db.hash_password`），`POST /api/auth/login`（失败统一 1008 防枚举，API.md 第 9.1 节）；前端 `/login` 登录页 + 路由全局守卫（未登录→/login；student 挡 /admin；已登录访问 /login 按 role 分流）+ 顶栏用户名/role 徽标/退出（原账号切换 select 移除，管理 tab 仅 admin 可见）+ 开屏收尾未登录落 /login + 管理台侧栏"退出登录"；种子账号：学生 2024001 小王/2024002 小李（123456）、管理员 admin（admin888）
 - [x] 前端第四轮升级（浅色未来感细化 + 交互重排，commit `a2d3555`）：主按钮内收角标+辉光、输入聚焦扫描线、路由过渡、激活 tab 强化；物料列表即时搜索+分类 chips+等级徽标（BASIC/ADV/PRO）+骨架屏；详情页主次按钮 2:1 层级；借期场景预设（课程设计/竞赛项目/长期研究）；物料精选在库优先+换一批；1024-1279 左轨修复（不再整条隐藏）；对话引用标签可点下钻卡片；管理台侧栏 01-05 序号+批量借出筛选+空态引导；`vite.config.js` watch 改轮询防 Windows EBUSY 崩溃；设计规范第 11 节登记；1440/1024/375 三视口截图 + vision 视觉回归通过（截图存 `deta/shots/redesign-*`，未入库）
 - [x] 前端第五轮（可选五项全做，commit 见本轮提交记录）：深色主题一键切换（`labx_theme` 持久化+跟随系统+Element 深色映射）；<768px 底部 tab 栏（safe-area 适配）；记录页状态筛选胶囊；语音输入（Web Speech API 特性检测+降级提示）；对话 ghost 常用提问 chips；修复第四轮路由过渡导致的切换空白（回退无过渡，commit `a556f2c`）；规范文档第 12 节登记
+- [x] 前端第六轮（commit `fd19a40`）：①去英文翻译标注——tabs/移动tab/等级徽标/LOC/CARDS/SYS/USER/ID/NAV/SCENE 等全中文化（保留 LABX 品牌与物料真名，C1-C4 与 01-04 编号保留）；②对话持久化——新增 `chatStore.js`（按账号 localStorage 分存），跨页面/刷新/重登不丢，控制台头「新会话」按钮 + 右轨「对话历史」列表切换；③暗黑模式黑白化——中性近黑灰阶+近白文字（页底 #0a0a0b/正文 #f4f4f5），绿仅点睛（#34c98e），Element 深色映射同步重写；规范文档第 13 节登记；浏览器截图 + vision 评审通过
 - [ ] 阶段 4：演示数据灌满 + 全流程测试 + 部署固化 + 录视频 ← **当前在这里**
 
 **阶段 4 待办细节**（做完划掉）：
