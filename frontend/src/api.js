@@ -133,6 +133,12 @@ export async function fetchUsers() {
   return data
 }
 
+// 登录认证（API.md 第 9.1 节）：成功 data 含 user_id/name/role；学号不存在或密码错统一 code 1008
+export async function login(userId, password) {
+  const { data } = await http.post('/auth/login', { user_id: userId, password })
+  return data
+}
+
 // 知识卡片全文（详情页"查看全部"入口）
 export async function fetchCard(cardId) {
   const { data } = await http.get(`/cards/${cardId}`)

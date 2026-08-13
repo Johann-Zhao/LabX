@@ -3,8 +3,9 @@
 与附录 A 的差异（已在 AGENTS.md 第 9 节登记）：
 - materials 增加 description 字段（一句用途说明，物料列表页要展示）
 - borrow_records 去掉用不到的 borrow_type 字段；status 增加 pending（专业级待审批）
-- users 表附录 A 未给结构，这里只保留最小字段（id=学号、姓名）
+- users 表附录 A 未给结构，这里按最小字段 + 登录认证（password_hash/role，API.md 第 9.1 节）
 """
+import hashlib
 import os
 from datetime import datetime
 
@@ -40,9 +41,17 @@ class Material(Base):
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String(32), primary_key=True)  # 学号
+    id = Column(String(32), primary_key=True)  # 学号/账号
     name = Column(String(50), nullable=False)
+    password_hash = Column(String(64))  # sha256 十六进制，见 hash_password
+    role = Column(String(20), nullable=False, default="student")  # student/admin
     created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+
+def hash_password(user_id: str, password: str) -> str:
+    """演示级口令哈希：sha256(学号 + 固定盐 + 密码)。课程演示够用；
+    生产环境应换 bcrypt/argon2 并每人随机盐。"""
+    return hashlib.sha256((user_id + ":labx:" + password).encode("utf-8")).hexdigest()
 
 
 class BorrowRecord(Base):

@@ -13,7 +13,8 @@ front-matter 字段：material_id / card_type / title / points（三条要点列
 CSV 格式（UTF-8 保存，第一行表头，Excel 另存为 CSV 即可）：
 material_id,name,model,category,access_level,total_quantity,available_quantity,location,description
 
-测试用户始终写入：2024001 小王、2024002 小李（演示"换个账号"用）。
+测试账号始终写入（密码只存 sha256 哈希，演示级，见 db.hash_password）：
+学生 2024001 小王 / 2024002 小李（密码 123456），管理员 admin（密码 admin888）。
 """
 import csv
 import json
@@ -22,7 +23,7 @@ from datetime import datetime
 
 import yaml
 
-from db import Base, BorrowRecord, KnowledgeCard, Material, SessionLocal, User, engine
+from db import Base, BorrowRecord, KnowledgeCard, Material, SessionLocal, User, engine, hash_password
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "..", "deta", "materials.csv")
@@ -50,8 +51,9 @@ SAMPLE_MATERIALS = [
 ]
 
 SAMPLE_USERS = [
-    {"id": "2024001", "name": "小王"},
-    {"id": "2024002", "name": "小李"},
+    {"id": "2024001", "name": "小王", "password": "123456", "role": "student"},
+    {"id": "2024002", "name": "小李", "password": "123456", "role": "student"},
+    {"id": "admin", "name": "管理员", "password": "admin888", "role": "admin"},
 ]
 
 
@@ -134,7 +136,11 @@ def main() -> None:
     db = SessionLocal()
     try:
         for u in SAMPLE_USERS:
-            db.add(User(id=u["id"], name=u["name"], created_at=datetime.now()))
+            db.add(User(
+                id=u["id"], name=u["name"], role=u["role"],
+                password_hash=hash_password(u["id"], u["password"]),
+                created_at=datetime.now(),
+            ))
         for m in load_materials():
             db.add(Material(**m, created_at=datetime.now(), updated_at=datetime.now()))
         for c in load_cards():
@@ -151,7 +157,7 @@ def main() -> None:
     # 打印结果，方便人工核对
     db = SessionLocal()
     try:
-        print(f"users: {[u.id + ' ' + u.name for u in db.query(User).all()]}")
+        print(f"users: {[u.id + ' ' + u.name + '/' + u.role for u in db.query(User).all()]}")
         for m in db.query(Material).all():
             print(f"  {m.id} {m.name} [{m.category}/{m.access_level}] 库存 {m.available_quantity}/{m.total_quantity} @ {m.location}")
         print(f"knowledge_cards: {db.query(KnowledgeCard).count()} 张")

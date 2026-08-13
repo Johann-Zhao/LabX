@@ -2,6 +2,7 @@
 // 管理台独立布局：左侧功能栏 + 右侧内容区（/admin 下 App.vue 不渲染学生端外壳）
 // 五个区块：审核申请 / 当前在借 / 全部流水（原三面板逻辑原样保留）/ 批量借出 / 录入物料
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   batchBorrow,
@@ -11,6 +12,15 @@ import {
   fetchUsers,
   reviewBorrow,
 } from '../api'
+import { logout } from '../store'
+
+const router = useRouter()
+
+// 退出登录：清登录态回 /login（路由守卫会兜住后续所有页面访问）
+function onLogout() {
+  logout()
+  router.push('/login')
+}
 
 const currentView = ref('pending') // pending / active / records / batch / create
 
@@ -254,7 +264,10 @@ onMounted(async () => {
           录入物料
         </div>
       </div>
-      <router-link to="/" class="back">← 返回学生端</router-link>
+      <div class="side-foot">
+        <router-link to="/" class="back">← 返回学生端</router-link>
+        <button type="button" class="back back-btn" @click="onLogout">退出登录</button>
+      </div>
     </aside>
 
     <!-- 右侧内容区 -->
@@ -545,8 +558,12 @@ onMounted(async () => {
 .side-badge {
   margin-left: var(--lx-space-2);
 }
-.back {
+.side-foot {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+}
+.back {
   padding: var(--lx-space-2) var(--lx-space-3);
   font-size: var(--lx-text-sm);
   color: var(--lx-text-secondary);
@@ -556,6 +573,18 @@ onMounted(async () => {
 .back:hover {
   color: var(--lx-green);
   background: var(--lx-green-light-9);
+}
+/* 退出登录：与"返回学生端"同款文字按钮，button 元素需清默认样式 */
+.back-btn {
+  font-family: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.back-btn:hover {
+  color: var(--lx-danger);
+  background: var(--lx-danger-bg);
 }
 .content {
   flex: 1;

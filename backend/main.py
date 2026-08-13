@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status
+from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status, hash_password
 from services import ask_core, batch_borrow_core, borrow_core, create_material_core, experience_core, recommend_bom_core, return_core, review_borrow_core
 
 app = FastAPI(title="LabX API")
@@ -86,6 +86,11 @@ class AgentChatReq(BaseModel):
     user_id: str
     message: str
     conv_id: str = "default"  # 前端为每个对话页生成的会话 ID，用于澄清状态挂起/恢复
+
+
+class LoginReq(BaseModel):
+    user_id: str
+    password: str
 
 
 # ---------- 工具函数 ----------
@@ -258,6 +263,16 @@ def ask(req: AskReq, db: Session = Depends(get_db)):
 
 
 # ---------- 用户 ----------
+
+@app.post("/api/auth/login")
+def login(req: LoginReq, db: Session = Depends(get_db)):
+    """登录认证（API.md 第 9.1 节）：学号 + 密码。失败统一 1008（不区分学号
+    不存在还是密码错，防枚举）；只比对哈希，密码不落日志。"""
+    u = db.get(User, req.user_id)
+    if u is None or u.password_hash != hash_password(req.user_id, req.password):
+        return err(1008, "学号或密码错误")
+    return ok("ok", {"user_id": u.id, "name": u.name, "role": u.role})
+
 
 @app.get("/api/users")
 def list_users(db: Session = Depends(get_db)):

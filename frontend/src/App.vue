@@ -1,24 +1,24 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { fetchUsers } from './api'
-import { currentUser, setUser } from './store'
+import { currentUser, logout } from './store'
 import IntroOverlay from './components/IntroOverlay.vue'
 
 const route = useRoute()
+const router = useRouter()
 // 管理台独立布局：/admin 下不渲染学生端外壳（顶栏 + 导航 tabs），直接显示 AdminPage
 const isAdmin = computed(() => route.path.startsWith('/admin'))
+// 登录页同样无外壳（全屏居中卡）
+const isLogin = computed(() => route.path === '/login')
+const bare = computed(() => isAdmin.value || isLogin.value)
 
 const users = ref([])
 
-// el-select 双向绑定的代理：读当前用户，写时切换全局状态
-const selectedUserId = computed({
-  get: () => currentUser.id,
-  set: (userId) => {
-    const u = users.value.find((x) => x.user_id === userId)
-    if (u) setUser({ id: u.user_id, name: u.name })
-  },
-})
+function onLogout() {
+  logout()
+  router.push('/login')
+}
 
 onMounted(async () => {
   const res = await fetchUsers()
@@ -27,7 +27,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <template v-if="!isAdmin">
+  <template v-if="!bare">
     <header class="topbar">
       <!-- 字标组合：LABX mono 小标 + 细分隔竖线 + 中文主标 -->
       <div class="brand">
@@ -37,14 +37,9 @@ onMounted(async () => {
       </div>
       <div class="topbar-side">
         <span class="user-label lx-num" aria-hidden="true">USER</span>
-        <el-select v-model="selectedUserId" size="small" class="user-switch">
-          <el-option
-            v-for="u in users"
-            :key="u.user_id"
-            :label="`${u.name}（${u.user_id}）`"
-            :value="u.user_id"
-          />
-        </el-select>
+        <span class="user-name">{{ currentUser.name }}</span>
+        <span class="role-badge lx-num">{{ currentUser.role === 'admin' ? 'ADMIN' : 'STUDENT' }}</span>
+        <button type="button" class="logout-btn" @click="onLogout">退出</button>
       </div>
     </header>
 
@@ -67,7 +62,7 @@ onMounted(async () => {
         <span class="tab-zh">我的借用</span>
         <span class="tab-en lx-num" aria-hidden="true">REC</span>
       </router-link>
-      <router-link to="/admin" class="tab" active-class="active">
+      <router-link v-if="currentUser.role === 'admin'" to="/admin" class="tab" active-class="active">
         <span class="tab-zh">管理</span>
         <span class="tab-en lx-num" aria-hidden="true">ADMIN</span>
       </router-link>
@@ -127,8 +122,37 @@ onMounted(async () => {
   letter-spacing: 0.1em;
   color: var(--lx-text-placeholder);
 }
-.user-switch {
-  width: 170px;
+.user-name {
+  font-size: var(--lx-text-base);
+  font-weight: var(--lx-font-medium);
+  color: var(--lx-text-primary);
+  white-space: nowrap;
+}
+/* role 徽标：mono 小字 + 浅绿底（管理端同一套令牌语言） */
+.role-badge {
+  padding: 1px var(--lx-space-2);
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.1em;
+  color: var(--lx-green);
+  background: var(--lx-green-light-9);
+  border: 1px solid var(--lx-green-light-8);
+  border-radius: var(--lx-radius-sm);
+}
+.logout-btn {
+  padding: var(--lx-space-1) var(--lx-space-2);
+  font-size: var(--lx-text-sm);
+  color: var(--lx-text-secondary);
+  background: transparent;
+  border: 1px solid var(--lx-border);
+  border-radius: var(--lx-radius-base);
+  cursor: pointer;
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.logout-btn:hover {
+  color: var(--lx-danger);
+  border-color: var(--lx-danger);
 }
 
 /* 仪器状态行：mono 状态文本贴左，细发线拉满剩余宽度 */

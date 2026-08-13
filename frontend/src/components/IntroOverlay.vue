@@ -3,7 +3,7 @@
 // IntroOverlay —— 开屏滚动叙事页（学生端首次访问全屏播放）
 // 规则（队长拍板）：
 // - 仅首次访问播放：localStorage 键 labx_intro_seen=1 标记已看；
-//   /admin 不渲染本组件（App.vue 控制）。
+//   /admin 不渲染本组件（App.vue 控制）；/login 允许播放（首访流程：动画 → 登录页）。
 // - 5 屏滚动叙事：用户滚动驱动画面变化（类似 Apple 产品页）。滚动发生在
 //   overlay 自己的滚动容器里，GSAP ScrollTrigger 的 scroller 指向它。
 // - 右上角常驻"跳过"，Esc 也可跳过；不提供"点击任意处跳过"（与滚动冲突）。
@@ -17,10 +17,14 @@
 //   明确要的滚动叙事仪式感页面，普通页面仍按 docs/design/labx-ui.md 执行。
 // ==========================================================================
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { gsap } from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
+import { currentUser } from '../store'
 
 gsap.registerPlugin(ScrollTrigger)
+
+const router = useRouter()
 
 // ---------- 是否播放 ----------
 const visible = ref(false)
@@ -88,12 +92,13 @@ function cleanupAll() {
   document.body.style.overflow = ''
 }
 
-// 标记已看 + 清理 + 播整体淡出后收起 overlay
+// 标记已看 + 清理 + 播整体淡出后收起 overlay；未登录则收尾落到登录页（首访流程：动画 → 登录）
 function finish() {
   if (leaving.value) return // 防 Esc/按钮连点重复触发
   try { localStorage.setItem('labx_intro_seen', '1') } catch { /* 写不进就算了 */ }
   cleanupAll()
   leaving.value = true
+  if (!currentUser.role) router.push('/login') // 已登录则原地不动
   // 等淡出动画（--lx-duration-slow 400ms）结束后再移除 DOM
   leaveTimer = setTimeout(() => { visible.value = false }, 400)
 }
