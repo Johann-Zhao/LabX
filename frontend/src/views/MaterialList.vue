@@ -12,7 +12,6 @@ const all = ref([])
 const loading = ref(true)
 
 // 借阅等级徽标（自定义双段式：mono 代码 + 中文，区分度比 el-tag 更高）
-const LEVEL_CODE = { basic: 'BASIC', advanced: 'ADV', professional: 'PRO' }
 const LEVEL_TEXT = { basic: '基础级', advanced: '进阶级', professional: '专业级' }
 
 // 分类列表：从数据里动态去重（"全部"永远在最前）
@@ -121,15 +120,12 @@ onMounted(load)
         <div class="info">
           <div class="head">
             <span class="name">{{ m.name }}</span>
-            <span :class="['level-badge', 'lv-' + m.access_level]">
-              <span class="level-code lx-num">{{ LEVEL_CODE[m.access_level] || m.access_level }}</span>
-              <span class="level-zh">{{ LEVEL_TEXT[m.access_level] || m.access_level }}</span>
-            </span>
+            <span :class="['level-badge', 'lv-' + m.access_level]">{{ LEVEL_TEXT[m.access_level] || m.access_level }}</span>
           </div>
           <div class="meta"><span class="lx-num">{{ m.material_id }}</span> · {{ m.model || '无型号' }} · {{ m.category }}</div>
           <div class="desc">{{ m.description }}</div>
           <div class="foot">
-            <span class="location"><span class="loc-tag lx-num" aria-hidden="true">LOC</span>{{ m.location }}</span>
+            <span class="location">{{ m.location }}</span>
             <span :class="['stock', 'lx-num', { empty: m.available_quantity === 0 }]">
               {{ m.available_quantity === 0 ? '借空' : `可借 ${m.available_quantity}/${m.total_quantity}` }}
             </span>
@@ -243,35 +239,26 @@ onMounted(load)
   color: var(--lx-text-primary);
   line-height: var(--lx-leading-tight);
 }
-/* 等级徽标：mono 代码块 + 中文双段式，三级色互相区分 */
+/* 等级徽标：纯中文 + 三级色，小圆角细边框 */
 .level-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--lx-space-1);
   flex-shrink: 0;
-  font-size: var(--lx-text-xs);
-}
-.level-code {
-  padding: 0 var(--lx-space-1);
+  padding: 0 var(--lx-space-2);
   border: 1px solid;
   border-radius: 3px;
-  letter-spacing: 0.08em;
-  line-height: 1.5;
+  font-size: var(--lx-text-xs);
+  line-height: 1.6;
 }
-.level-zh {
-  color: var(--lx-text-secondary);
-}
-.lv-basic .level-code {
+.lv-basic.level-badge {
   color: var(--lx-green);
   background: var(--lx-green-light-9);
   border-color: var(--lx-green-light-8);
 }
-.lv-advanced .level-code {
+.lv-advanced.level-badge {
   color: var(--lx-warning);
   background: var(--lx-warning-bg);
   border-color: var(--el-color-warning-light-7);
 }
-.lv-professional .level-code {
+.lv-professional.level-badge {
   color: var(--lx-danger);
   background: var(--lx-danger-bg);
   border-color: var(--el-color-danger-light-7);

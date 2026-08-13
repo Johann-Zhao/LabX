@@ -40,13 +40,13 @@ async function onSubmit() {
 <template>
   <div class="login-wrap">
     <div class="login-card lx-brackets">
-      <div class="hud lx-num">LABX ACCESS</div>
+      <div class="hud lx-num">LABX 访问</div>
       <h1 class="title">登录创新空间</h1>
       <p class="sub">学号 + 密码，进入你的实验台</p>
 
       <form class="form" @submit.prevent="onSubmit">
         <label class="field">
-          <span class="field-label lx-num">ID</span>
+          <span class="field-label lx-num">账号</span>
           <input
             v-model.trim="userId"
             class="field-input lx-num"
@@ -56,7 +56,7 @@ async function onSubmit() {
           />
         </label>
         <label class="field">
-          <span class="field-label lx-num">KEY</span>
+          <span class="field-label lx-num">密码</span>
           <input
             v-model="password"
             class="field-input"
@@ -73,7 +73,7 @@ async function onSubmit() {
         </button>
       </form>
 
-      <p class="demo-hint lx-num">DEMO · 2024001 / 123456（学生） · admin / admin888（管理）</p>
+      <p class="demo-hint lx-num">演示账号 · 2024001 / 123456（学生） · admin / admin888（管理）</p>
     </div>
   </div>
 </template>

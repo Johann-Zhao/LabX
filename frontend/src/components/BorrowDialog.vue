@@ -63,7 +63,7 @@ function onConfirm() {
     <div class="tip">一个月以内直接借出；超过一个月需填写理由，人工审核通过后才算借出。</div>
     <!-- 场景预设：常见用途一次点选（天数+理由一起填好，可再改） -->
     <div class="scenarios">
-      <span class="sc-label lx-num" aria-hidden="true">SCENE</span>
+      <span class="sc-label lx-num" aria-hidden="true">场景</span>
       <button
         v-for="s in SCENARIOS"
         :key="s.label"

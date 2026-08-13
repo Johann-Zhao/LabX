@@ -45,9 +45,9 @@ onMounted(async () => {
         <span class="brand-name">创新空间</span>
       </div>
       <div class="topbar-side">
-        <span class="user-label lx-num" aria-hidden="true">USER</span>
+        <span class="user-label lx-num" aria-hidden="true">用户</span>
         <span class="user-name">{{ currentUser.name }}</span>
-        <span class="role-badge lx-num">{{ currentUser.role === 'admin' ? 'ADMIN' : 'STUDENT' }}</span>
+        <span class="role-badge lx-num">{{ currentUser.role === 'admin' ? '管理员' : '学生' }}</span>
         <button
           type="button"
           class="logout-btn theme-btn"
@@ -62,45 +62,37 @@ onMounted(async () => {
 
     <!-- 仪器状态行：mono 状态文本 + 细发线（USERS 数是真实用户列表长度） -->
     <div class="statusline" aria-hidden="true">
-      <span class="status-text lx-num">SYS READY<template v-if="users.length"> · USERS {{ users.length }}</template></span>
+      <span class="status-text lx-num">系统就绪<template v-if="users.length"> · 用户 {{ users.length }}</template></span>
       <span class="status-rule"></span>
     </div>
 
     <nav class="tabs">
       <router-link to="/" class="tab" exact-active-class="active">
         <span class="tab-zh">智能助手</span>
-        <span class="tab-en lx-num" aria-hidden="true">AGENT</span>
       </router-link>
       <router-link to="/materials" class="tab" active-class="active">
         <span class="tab-zh">物料</span>
-        <span class="tab-en lx-num" aria-hidden="true">MAT</span>
       </router-link>
       <router-link to="/records" class="tab" active-class="active">
         <span class="tab-zh">我的借用</span>
-        <span class="tab-en lx-num" aria-hidden="true">REC</span>
       </router-link>
       <router-link v-if="currentUser.role === 'admin'" to="/admin" class="tab" active-class="active">
         <span class="tab-zh">管理</span>
-        <span class="tab-en lx-num" aria-hidden="true">ADMIN</span>
       </router-link>
     </nav>
 
     <!-- 移动端底部 tab 栏：<768px 常驻底部，单手可达；宽屏隐藏 -->
     <nav class="mobile-tabs" aria-label="移动端导航">
       <router-link to="/" class="mtab" exact-active-class="active">
-        <span class="mtab-en lx-num">AGENT</span>
         <span class="mtab-zh">助手</span>
       </router-link>
       <router-link to="/materials" class="mtab" active-class="active">
-        <span class="mtab-en lx-num">MAT</span>
         <span class="mtab-zh">物料</span>
       </router-link>
       <router-link to="/records" class="mtab" active-class="active">
-        <span class="mtab-en lx-num">REC</span>
         <span class="mtab-zh">借用</span>
       </router-link>
       <router-link v-if="currentUser.role === 'admin'" to="/admin" class="mtab" active-class="active">
-        <span class="mtab-en lx-num">ADMIN</span>
         <span class="mtab-zh">管理</span>
       </router-link>
     </nav>

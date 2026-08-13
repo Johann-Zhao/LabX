@@ -232,83 +232,84 @@
    深色主题（html[data-theme='dark']）：与 tokens.css 的深色副本联动
    ========================================================================== */
 [data-theme='dark'] {
-  --el-color-primary: #5d9a7b;
-  --el-color-primary-light-3: #7fb398;
-  --el-color-primary-light-5: #4a8264;
-  --el-color-primary-light-7: #3a6850;
-  --el-color-primary-light-8: #2b4437;
-  --el-color-primary-light-9: #1c2a23;
-  --el-color-primary-dark-2: #8fc0a4;
+  /* 与 tokens.css 第五轮黑白基调联动：中性灰阶 + 近白文字，绿色点睛 */
+  --el-color-primary: #34c98e;
+  --el-color-primary-light-3: #6bddb0;
+  --el-color-primary-light-5: #2e8f68;
+  --el-color-primary-light-7: #245e49;
+  --el-color-primary-light-8: #1d4033;
+  --el-color-primary-light-9: #14271f;
+  --el-color-primary-dark-2: #7fe7bb;
 
-  --el-color-success: #5d9a7b;
-  --el-color-success-light-3: #7fb398;
-  --el-color-success-light-5: #4a8264;
-  --el-color-success-light-7: #3a6850;
-  --el-color-success-light-8: #2b4437;
-  --el-color-success-light-9: #1c2a23;
-  --el-color-success-dark-2: #8fc0a4;
+  --el-color-success: #34c98e;
+  --el-color-success-light-3: #6bddb0;
+  --el-color-success-light-5: #2e8f68;
+  --el-color-success-light-7: #245e49;
+  --el-color-success-light-8: #1d4033;
+  --el-color-success-light-9: #14271f;
+  --el-color-success-dark-2: #7fe7bb;
 
-  --el-color-warning: #d8a75a;
-  --el-color-warning-light-3: #e0bc80;
-  --el-color-warning-light-5: #cfa765;
-  --el-color-warning-light-7: #8a6c3f;
-  --el-color-warning-light-8: #4a3a22;
-  --el-color-warning-light-9: #2e2c1e;
-  --el-color-warning-dark-2: #e8c489;
+  --el-color-warning: #e2b45e;
+  --el-color-warning-light-3: #eaca85;
+  --el-color-warning-light-5: #c99a44;
+  --el-color-warning-light-7: #7a5f2e;
+  --el-color-warning-light-8: #453717;
+  --el-color-warning-light-9: #2a2212;
+  --el-color-warning-dark-2: #eccb8e;
 
-  --el-color-danger: #d4736b;
-  --el-color-danger-light-3: #df8f88;
-  --el-color-danger-light-5: #c96f68;
-  --el-color-danger-light-7: #7c453f;
-  --el-color-danger-light-8: #3d2522;
-  --el-color-danger-light-9: #2d2420;
-  --el-color-danger-dark-2: #e39a94;
+  --el-color-danger: #e1736b;
+  --el-color-danger-light-3: #ea9a94;
+  --el-color-danger-light-5: #d05c54;
+  --el-color-danger-light-7: #823a35;
+  --el-color-danger-light-8: #40201d;
+  --el-color-danger-light-9: #2a1614;
+  --el-color-danger-dark-2: #eb9f9a;
 
-  --el-color-error: #d4736b;
-  --el-color-error-light-3: #df8f88;
-  --el-color-error-light-5: #c96f68;
-  --el-color-error-light-7: #7c453f;
-  --el-color-error-light-8: #3d2522;
-  --el-color-error-light-9: #2d2420;
-  --el-color-error-dark-2: #e39a94;
+  --el-color-error: #e1736b;
+  --el-color-error-light-3: #ea9a94;
+  --el-color-error-light-5: #d05c54;
+  --el-color-error-light-7: #823a35;
+  --el-color-error-light-8: #40201d;
+  --el-color-error-light-9: #2a1614;
+  --el-color-error-dark-2: #eb9f9a;
 
-  --el-color-info: #9aa19c;
-  --el-color-info-light-3: #b0b5b2;
-  --el-color-info-light-5: #8a908c;
-  --el-color-info-light-7: #4c524e;
-  --el-color-info-light-8: #2a2e2c;
-  --el-color-info-light-9: #242824;
-  --el-color-info-dark-2: #aeb4b0;
+  --el-color-info: #a5a5ab;
+  --el-color-info-light-3: #bcbcc1;
+  --el-color-info-light-5: #8b8b91;
+  --el-color-info-light-7: #4e4e53;
+  --el-color-info-light-8: #2b2b2f;
+  --el-color-info-light-9: #1c1c20;
+  --el-color-info-dark-2: #b8b8bd;
 
-  --el-text-color-primary: #e9ebe8;
-  --el-text-color-regular: #c6cbc6;
-  --el-text-color-secondary: #8f978f;
-  --el-text-color-placeholder: #6a726b;
-  --el-text-color-disabled: #565d57;
+  --el-text-color-primary: #f4f4f5;
+  --el-text-color-regular: #d5d5d9;
+  --el-text-color-secondary: #9b9ba2;
+  --el-text-color-placeholder: #63636a;
+  --el-text-color-disabled: #4a4a50;
 
-  --el-border-color: #2c3530;
-  --el-border-color-light: #262e29;
-  --el-border-color-lighter: #212823;
-  --el-border-color-extra-light: #1d241f;
-  --el-border-color-hover: #3a453f;
+  --el-border-color: #26262a;
+  --el-border-color-light: #1f1f23;
+  --el-border-color-lighter: #1a1a1d;
+  --el-border-color-extra-light: #17171a;
+  --el-border-color-hover: #3a3a40;
 
-  --el-fill-color: #1e2622;
-  --el-fill-color-light: #222b26;
-  --el-fill-color-lighter: #1d2420;
-  --el-fill-color-extra-light: #1a211d;
-  --el-fill-color-dark: #2a332e;
-  --el-fill-color-darker: #303a34;
-  --el-fill-color-blank: #171e1a;
+  --el-fill-color: #1b1b1e;
+  --el-fill-color-light: #222226;
+  --el-fill-color-lighter: #1a1a1d;
+  --el-fill-color-extra-light: #17171a;
+  --el-fill-color-dark: #2a2a2f;
+  --el-fill-color-darker: #303036;
+  --el-fill-color-blank: #131315;
 
-  --el-bg-color: #171e1a;
-  --el-bg-color-page: #101613;
-  --el-bg-color-overlay: #1b231e;
+  --el-bg-color: #131315;
+  --el-bg-color-page: #0a0a0b;
+  --el-bg-color-overlay: #1a1a1d;
 
-  --el-disabled-bg-color: #1e2622;
-  --el-disabled-text-color: #565d57;
-  --el-disabled-border-color: #262e29;
+  --el-disabled-bg-color: #1b1b1e;
+  --el-disabled-text-color: #4a4a50;
+  --el-disabled-border-color: #1f1f23;
 
-  --el-overlay-color-lighter: rgba(0, 0, 0, 0.6);
+  --el-overlay-color-lighter: rgba(0, 0, 0, 0.7);
 }
 
 /* 键盘焦点：明显但克制的绿描边（Element 组件自身的 focus 样式不受影响） */

@@ -18,7 +18,6 @@ const durationDialog = ref(false)
 const borrowDays = ref(30)
 const borrowReason = ref('')
 
-const LEVEL_CODE = { basic: 'BASIC', advanced: 'ADV', professional: 'PRO' }
 const LEVEL_TEXT = { basic: '基础级', advanced: '进阶级', professional: '专业级' }
 
 // 安全确认弹窗（进阶级物料首次借用，1002）
@@ -101,10 +100,7 @@ async function doBorrow(safetyConfirmed) {
       <!-- 信息区：名称 → 编号/型号/分类 → 描述 → 关键事实格 -->
       <div class="head-row">
         <h1 class="name">{{ material.name }}</h1>
-        <span :class="['level-badge', 'lv-' + material.access_level]">
-          <span class="level-code lx-num">{{ LEVEL_CODE[material.access_level] || material.access_level }}</span>
-          <span class="level-zh">{{ LEVEL_TEXT[material.access_level] || material.access_level }}</span>
-        </span>
+        <span :class="['level-badge', 'lv-' + material.access_level]">{{ LEVEL_TEXT[material.access_level] || material.access_level }}</span>
       </div>
       <div class="meta">
         <span class="lx-num">{{ material.material_id }}</span> · {{ material.model || '无型号' }} · {{ material.category }}
@@ -134,7 +130,7 @@ async function doBorrow(safetyConfirmed) {
       <section v-if="material.knowledge_cards?.length" class="cards">
         <div class="cards-title">
           <span>知识卡片</span>
-          <span class="title-tag lx-num">CARDS {{ material.knowledge_cards.length }}</span>
+          <span class="title-tag lx-num">共 {{ material.knowledge_cards.length }} 张</span>
         </div>
         <div
           v-for="c in material.knowledge_cards"
@@ -213,34 +209,25 @@ async function doBorrow(safetyConfirmed) {
 }
 /* 等级徽标：与列表页同款双段式（mono 代码 + 中文），颜色走语义派生令牌 */
 .level-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--lx-space-1);
   flex-shrink: 0;
-  font-size: var(--lx-text-xs);
-  align-self: center;
-}
-.level-code {
-  padding: 0 var(--lx-space-1);
+  padding: 0 var(--lx-space-2);
   border: 1px solid;
   border-radius: 3px;
-  letter-spacing: 0.08em;
-  line-height: 1.5;
+  font-size: var(--lx-text-xs);
+  line-height: 1.6;
+  align-self: center;
 }
-.level-zh {
-  color: var(--lx-text-secondary);
-}
-.lv-basic .level-code {
+.lv-basic.level-badge {
   color: var(--lx-green);
   background: var(--lx-green-light-9);
   border-color: var(--lx-green-light-8);
 }
-.lv-advanced .level-code {
+.lv-advanced.level-badge {
   color: var(--lx-warning);
   background: var(--lx-warning-bg);
   border-color: var(--el-color-warning-light-7);
 }
-.lv-professional .level-code {
+.lv-professional.level-badge {
   color: var(--lx-danger);
   background: var(--lx-danger-bg);
   border-color: var(--el-color-danger-light-7);

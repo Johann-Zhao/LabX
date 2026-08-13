@@ -4,6 +4,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { agentChatStream, askQuestion, fetchMaterial, fetchMaterials, fetchRecords } from '../api'
 import { currentUser } from '../store'
+import {
+  appendMessage,
+  conversations,
+  currentId,
+  ensureConversation,
+  newConversation,
+  switchConversation,
+} from '../chatStore'
 import BomCard from './BomCard.vue'
 import MaterialImage from '../components/MaterialImage.vue'
 
@@ -12,12 +20,9 @@ const router = useRouter()
 const materialId = route.query.material_id || null // 从物料详情页进入时带上（数字分身对话窗）
 const materialName = ref('')
 
-// 会话 ID：页面生命周期内不变，用于后端挂起/恢复澄清状态（见 docs/agent-workflow.md）
-const convId = `conv-${Date.now()}`
-const convIdShort = convId.slice(-6) // 控制台头部只显示尾号，全 ID 无意义
-
-// { role, text, refs, steps, provenance, clarify: {options}, bom }
-const messages = ref([])
+// 会话与消息都在 chatStore 里（按账号持久化）：切页面/刷新不丢，支持多会话切换
+const convIdShort = computed(() => currentId().slice(-6)) // 控制台头部只显示尾号
+const messages = computed(() => (conversations.value.find((c) => c.id === currentId()) || { messages: [] }).messages)
 const input = ref('')
 const thinking = ref(false)
 const listRef = ref(null)
@@ -107,15 +112,19 @@ watch(() => currentUser.id, loadBorrowing)
 
 onMounted(async () => {
   clockTimer = setInterval(() => (now.value = new Date()), 1000)
+  ensureConversation() // 恢复最近会话或新建（同一账号跨页面/刷新不丢）
   loadBorrowing()
   loadMaterials()
   if (materialId) {
     const res = await fetchMaterial(materialId)
     if (res.code === 0) materialName.value = res.data.name
-    messages.value.push({
-      role: 'assistant',
-      text: `你好，我是${materialName.value || '这件物料'}的专属助教。关于它的接线、用法、踩坑，都可以问我。`,
-    })
+    // 仅当会话为空时才放问候语，避免每次从物料页进入都重复打招呼
+    if (messages.value.length === 0) {
+      appendMessage({
+        role: 'assistant',
+        text: `你好，我是${materialName.value || '这件物料'}的专属助教。关于它的接线、用法、踩坑，都可以问我。`,
+      })
+    }
   }
   // 非物料模式：不再预置长欢迎气泡，空状态欢迎区由模板渲染
 })
@@ -173,7 +182,7 @@ async function send() {
 
 // 点击澄清选项/常用提问/能力矩阵 = 把文本作为下一条消息发送（同一会话）
 async function sendText(text) {
-  messages.value.push({ role: 'user', text })
+  appendMessage({ role: 'user', text })
   input.value = ''
   thinking.value = true
   streamLines.value = []
@@ -183,13 +192,13 @@ async function sendText(text) {
     // 物料详情页进入 → 限定物料的 RAG 问答；否则走智能体编排（流式过程显化，失败自动回退非流式）
     const res = materialId
       ? await askQuestion(text, materialId)
-      : await agentChatStream(currentUser.id, text, convId, (s) => {
+      : await agentChatStream(currentUser.id, text, currentId(), (s) => {
           streamLines.value.push(s)
           scrollToBottom()
         })
     streamActive.value = false
     if (res.code === 0) {
-      messages.value.push({
+      appendMessage({
         role: 'assistant',
         // 气泡是纯文本渲染（pre-wrap），洗掉 LLM 偶发输出的 markdown 加粗记号
         text: (res.data.answer || '').replace(/\*\*/g, ''),
@@ -211,6 +220,35 @@ async function sendText(text) {
   }
 }
 
+// 新会话：清空上下文重新开始（历史仍保留在右侧对话历史里）
+async function onNewConversation() {
+  if (thinking.value) {
+    ElMessage.info('正在生成回复，稍等片刻再开新会话')
+    return
+  }
+  newConversation()
+  input.value = ''
+  streamLines.value = []
+  streamActive.value = false
+  await scrollToBottom()
+}
+
+// 切换历史会话
+async function onSwitchConversation(id) {
+  if (thinking.value || id === currentId()) return
+  switchConversation(id)
+  streamLines.value = []
+  streamActive.value = false
+  await scrollToBottom()
+}
+
+// 时间戳 → HH:mm 短格式（历史列表用）
+function fmtTime(ts) {
+  const d = new Date(ts)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 async function scrollToBottom() {
   await nextTick()
   listRef.value?.scrollTo({ top: listRef.value.scrollHeight, behavior: 'smooth' })
@@ -225,7 +263,7 @@ async function scrollToBottom() {
       <section class="rail-sec">
         <div class="sec-head">
           <span>能力矩阵</span>
-          <span class="sec-tag lx-num">CAP {{ CAPABILITIES.length }}</span>
+          <span class="sec-tag lx-num">{{ CAPABILITIES.length }} 项</span>
         </div>
         <button v-for="c in CAPABILITIES" :key="c.code" type="button" class="cap-row" @click="sendText(c.prompt)">
           <span class="cap-code lx-num">{{ c.code }}</span>
@@ -240,7 +278,7 @@ async function scrollToBottom() {
       <section class="rail-sec">
         <div class="sec-head">
           <span>系统状态</span>
-          <span class="sec-tag lx-num">SYS</span>
+          <span class="sec-tag lx-num">状态</span>
         </div>
         <div class="stat-row">
           <span class="stat-label">物料登记</span>
@@ -262,8 +300,9 @@ async function scrollToBottom() {
       <!-- 控制台头：在线 LED + mono 状态行 + 遥测时钟 -->
       <div class="console-head">
         <span class="led" aria-hidden="true"></span>
-        <span class="head-title lx-num">LABX AGENT</span>
-        <span class="head-status lx-num">ONLINE</span>
+        <span class="head-title lx-num">LABX 智能体</span>
+        <span class="head-status lx-num">在线</span>
+        <button type="button" class="new-conv-btn lx-num" @click="onNewConversation">新会话</button>
         <span class="head-clock lx-num">{{ clock }}</span>
       </div>
 
@@ -284,7 +323,7 @@ async function scrollToBottom() {
             <span class="radar-sweep"></span>
             <span class="radar-dot"></span>
           </div>
-          <div class="welcome-kicker lx-num">LABX · EXPERIENTIAL AGENT</div>
+          <div class="welcome-kicker lx-num">LABX · 体验型智能体</div>
           <div class="welcome-name">说个想法，剩下的交给我</div>
           <p class="welcome-tagline">出方案并可一键预约物料；遇到故障，一步步带你排查。</p>
           <div class="cmd-list">
@@ -437,7 +476,7 @@ async function scrollToBottom() {
           <span class="sec-tag lx-num">USER</span>
         </div>
         <div class="user-name">{{ currentUser.name }}</div>
-        <div class="user-id lx-num">ID {{ currentUser.id }}</div>
+        <div class="user-id lx-num">学号 {{ currentUser.id }}</div>
         <!-- 在借件数：仪器读数风（大号 mono 数字 + 小号单位标签） -->
         <div v-if="borrowingCount !== null" class="readout">
           <div class="readout-num lx-num">{{ borrowingCount }}</div>
@@ -449,7 +488,7 @@ async function scrollToBottom() {
         <div class="sec-head">
           <span>物料精选</span>
           <span class="sec-actions">
-            <span class="sec-tag lx-num">MAT {{ showcase.length }}</span>
+            <span class="sec-tag lx-num">精选 {{ showcase.length }}</span>
             <button
               v-if="materials.length > 4"
               type="button"
@@ -471,13 +510,32 @@ async function scrollToBottom() {
             {{ m.available_quantity === 0 ? '借空' : `×${m.available_quantity}` }}
           </span>
         </router-link>
-        <div v-if="!showcase.length" class="mat-empty lx-num">NO DATA</div>
+        <div v-if="!showcase.length" class="mat-empty lx-num">暂无数据</div>
+      </section>
+
+      <section class="rail-sec">
+        <div class="sec-head">
+          <span>对话历史</span>
+          <span class="sec-tag lx-num">{{ conversations.length }}</span>
+        </div>
+        <div v-if="!conversations.length" class="mat-empty lx-num">暂无历史</div>
+        <button
+          v-for="c in conversations"
+          :key="c.id"
+          type="button"
+          class="his-row"
+          :class="{ active: c.id === currentId() }"
+          @click="onSwitchConversation(c.id)"
+        >
+          <span class="his-title">{{ c.title || '新会话' }}</span>
+          <span class="his-time lx-num">{{ fmtTime(c.updatedAt) }}</span>
+        </button>
       </section>
 
       <section class="rail-sec">
         <div class="sec-head">
           <span>快捷功能</span>
-          <span class="sec-tag lx-num">NAV</span>
+          <span class="sec-tag lx-num">导航</span>
         </div>
         <router-link v-for="l in QUICK_LINKS" :key="l.to" :to="l.to" class="qlink">
           <span class="q-idx lx-num">{{ l.idx }}</span>
@@ -558,6 +616,26 @@ async function scrollToBottom() {
   font-size: var(--lx-text-xs);
   letter-spacing: 0.06em;
   color: var(--lx-text-placeholder);
+}
+/* 新会话：文字级小按钮，与状态行同排，不抢焦点 */
+.new-conv-btn {
+  margin-left: var(--lx-space-2);
+  padding: 0 var(--lx-space-2);
+  font-size: var(--lx-text-xs);
+  letter-spacing: 0.06em;
+  color: var(--lx-text-secondary);
+  background: transparent;
+  border: 1px solid var(--lx-border-light);
+  border-radius: var(--lx-radius-sm);
+  cursor: pointer;
+  line-height: 1.6;
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.new-conv-btn:hover {
+  color: var(--lx-green);
+  border-color: var(--lx-green-light-5);
 }
 .ctx {
   margin: var(--lx-space-2) var(--lx-space-3) 0;
@@ -1216,6 +1294,45 @@ async function scrollToBottom() {
   padding: var(--lx-space-3) var(--lx-space-1);
   font-size: var(--lx-text-xs);
   letter-spacing: 0.1em;
+  color: var(--lx-text-placeholder);
+}
+
+/* 对话历史行：标题 + 时间，点击切换，当前项浅绿底 */
+.his-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lx-space-2);
+  width: 100%;
+  padding: var(--lx-space-2) var(--lx-space-1);
+  border: none;
+  border-bottom: 1px solid var(--lx-border-lighter);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--lx-duration-fast) var(--lx-ease-out);
+}
+.his-row:hover {
+  background: var(--lx-bg-hover);
+}
+.his-row.active {
+  background: var(--lx-green-light-9);
+}
+.his-row.active .his-title {
+  color: var(--lx-green);
+}
+.his-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--lx-text-sm);
+  color: var(--lx-text-regular);
+}
+.his-time {
+  flex-shrink: 0;
+  font-size: var(--lx-text-xs);
   color: var(--lx-text-placeholder);
 }
 
