@@ -7,9 +7,10 @@
 //   - 左文右终端，内容分块 opacity + translateY + blur 依次入场
 //   - 终端卡片：tab 切换 + mono 绿色 $ 前缀 + 复制按钮
 //
-// 交互规则沿用队长拍板：
-// - 仅首次访问播放：localStorage 键 labx_intro_seen=1 标记已看；
-//   /admin 不渲染本组件（App.vue 控制）；/login 允许播放（首访流程：动画 → 登录页）。
+// 交互规则（第九轮调整）：
+// - 每次登录成功后播放：监听 currentUser.role 从空到非空（登录成功）时重播；
+//   已登录后刷新页面不重播，避免刷新一次就打断一次工作流。
+// - 学生、管理员登录都播放（App.vue 不再排除 /admin）。
 // - 右上角"跳过"、Esc、主按钮均可结束；结束淡出 400ms 后移除 DOM。
 // - prefers-reduced-motion：不起 canvas、不建循环动画，所有内容静态直接可见。
 // - 视觉图加载失败 @error 隐藏图片，只留暗场光晕 + 点阵（优雅降级）。
@@ -17,19 +18,16 @@
 // - 开屏豁免（docs/design/labx-ui.md 第 8 节）：本页允许循环氛围动画与
 //   叙事假终端；本次为对齐 harness 固定深色开屏（应用主题不受影响）。
 // ==========================================================================
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { currentUser } from '../store'
 
 const router = useRouter()
 
 // ---------- 是否播放 ----------
+// 初始不播：等待"登录成功"事件（currentUser.role 空 → 非空）触发重播。
+// 这样每次登录都会看到开屏动画，而已登录状态刷新页面不会反复打断。
 const visible = ref(false)
-try {
-  visible.value = localStorage.getItem('labx_intro_seen') !== '1'
-} catch {
-  visible.value = false // 隐私模式等异常：不挡路，直接进主界面
-}
 
 // 系统开"减少动态效果"：不建 canvas、不起循环动画
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -105,10 +103,9 @@ function cleanupAll() {
   document.body.style.overflow = ''
 }
 
-// 标记已看 + 清理 + 淡出后收起；未登录收尾落登录页（首访流程：动画 → 登录）
+// 清理 + 淡出后收起；未登录收尾落登录页（理论上登录后才会播放，保留兜底）
 function finish() {
   if (leaving.value) return // 防 Esc/按钮连点重复触发
-  try { localStorage.setItem('labx_intro_seen', '1') } catch { /* 写不进就算了 */ }
   cleanupAll()
   leaving.value = true
   if (!currentUser.role) router.push('/login') // 已登录则原地不动
@@ -345,14 +342,34 @@ const heroImgLoaded = ref(false)
 function onHeroImgError() { heroImgFailed.value = true }
 function onHeroImgLoad() { heroImgLoaded.value = true }
 
-// ---------- 挂载 / 卸载 ----------
-onMounted(() => {
+// ---------- 每次登录重播 ----------
+// 登录成功：currentUser.role 由空变非空时重播整段开屏。
+// visible 置 true 后等下一帧 DOM 就绪再起 canvas，否则 canvasRef 还是 null。
+async function replay() {
+  if (visible.value && !leaving.value) return // 已在播放中不重复触发
+  leaving.value = false
+  activeTermId.value = 'quick'
+  copied.value = false
+  heroImgFailed.value = false
+  heroImgLoaded.value = false
+  mouseX = NaN
+  mouseY = NaN
+  visible.value = true
+  await nextTick()
   if (!visible.value) return
   document.body.style.overflow = 'hidden' // 单屏开屏：锁住主页面滚动
   window.addEventListener('keydown', onKeydown)
   startCanvas()
-})
+}
 
+watch(
+  () => currentUser.role,
+  (role, prevRole) => {
+    if (role && !prevRole) replay() // 空 → 非空 = 本次会话刚完成登录
+  },
+)
+
+// ---------- 挂载 / 卸载 ----------
 onBeforeUnmount(() => {
   clearTimeout(leaveTimer)
   clearTimeout(copyTimer)

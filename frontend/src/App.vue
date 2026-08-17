@@ -100,8 +100,8 @@ onMounted(async () => {
 
   <router-view />
 
-  <!-- 开屏介绍动画：仅学生端首次访问播放（/admin 永不渲染；组件内部用 localStorage 控仅首次） -->
-  <IntroOverlay v-if="!isAdmin" />
+  <!-- 开屏介绍动画：每次登录成功后播放（组件监听 currentUser.role 空→非空；学生/管理都播） -->
+  <IntroOverlay />
 </template>
 
 <style scoped>

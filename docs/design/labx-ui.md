@@ -327,7 +327,7 @@
 ### 15.2 改动内容
 
 - **单屏开屏**：`IntroOverlay.vue` 删除 GSAP ScrollTrigger 五屏结构，改为 100svh 单屏；
-  localStorage 键 `labx_intro_seen`、跳过/Esc/未登录落 `/login` 等既有规则全部保留。
+  跳过/Esc/主按钮结束等规则保留（播放触发规则在第九轮调整，见第 16 节）。
 - **固定深色**：开屏根节点挂 `data-theme="dark"`（仅作用本组件子树），复刻原站暗场；
   结束淡出后应用仍按 `labx_theme`/系统偏好显示浅色或深色，主基调不变。
 - **背景三层**：软绿光晕（`--lx-green-glow-soft` 漂移）→ Seedream 5.0 Pro 主视觉
@@ -347,6 +347,26 @@
 ### 15.3 验证
 
 `npm run build` 通过；Playwright 实测 1440×900 与 375×667：
-首屏元素入场、终端 tab 切换、复制反馈、跳过→`/login`、localStorage 标记、
-`prefers-reduced-motion` 降级、无横向溢出、无控制台错误。
-截图存 `deta/shots/intro-harness-*`（未入库）。
+首屏元素入场、终端 tab 切换、复制反馈、跳过收尾、`prefers-reduced-motion` 降级、
+无横向溢出、无控制台错误。截图存 `deta/shots/intro-harness-*`（未入库）。
+
+## 16. 第九轮：开屏改为每次登录播放（2026-08-17）
+
+### 16.1 背景
+
+队长要求：开屏动画**每次登录都要出现**，不再"仅首次访问播放"。
+
+### 16.2 改动内容
+
+- `IntroOverlay.vue` 移除 `labx_intro_seen` 永久标记，初始 `visible=false`；
+  改为 `watch(currentUser.role)`：`role` 从空到非空（登录成功）时 `replay()` 重播整段开屏。
+- `App.vue` 移除 `<IntroOverlay v-if="!isAdmin" />` 的 `/admin` 排除：学生、管理员登录后都播；
+  已登录状态刷新页面不会重播，避免打断工作流。
+- 重播时重置终端 tab、复制态、图片加载态、鼠标点阵状态，等 `nextTick` DOM 就绪后再起 canvas。
+- 跳过/Esc/主按钮结束逻辑不变；未登录落 `/login` 仅作兜底保留。
+
+### 16.3 验证
+
+Playwright 实测：登录页初始无开屏 → 学生登录后开屏出现 → 跳过进入 `/`；
+管理员登录后开屏出现 → 跳过进入 `/admin`；已登录状态刷新不重播；无控制台错误。
+截图存 `deta/shots/intro-every-login-student.png`（未入库）。
