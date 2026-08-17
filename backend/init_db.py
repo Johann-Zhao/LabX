@@ -28,6 +28,7 @@ from db import Base, BorrowRecord, KnowledgeCard, Material, SessionLocal, User, 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "..", "deta", "materials.csv")
 CARDS_DIR = os.path.join(BASE_DIR, "..", "deta", "cards")
+EXPERIENCES_PATH = os.path.join(BASE_DIR, "..", "deta", "experiences.csv")
 
 SAMPLE_MATERIALS = [
     {
@@ -113,6 +114,37 @@ def parse_card_file(path: str) -> dict | None:
     }
 
 
+def load_preset_experiences() -> list[dict]:
+    """读取 deta/experiences.csv 预置社区经验（5 条 tip 卡片）。
+
+    CSV 字段：material_id,user_id,problem,solution,scenario。
+    最终演示前灌入，保证"经验闭环"在第一幕就能演示。
+    """
+    if not os.path.exists(EXPERIENCES_PATH):
+        print(f"未找到 {os.path.abspath(EXPERIENCES_PATH)}，跳过预置经验")
+        return []
+    tips = []
+    with open(EXPERIENCES_PATH, encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            solution = (row.get("solution") or "").strip()
+            problem = (row.get("problem") or "").strip()
+            scenario = (row.get("scenario") or "").strip()
+            material_id = (row.get("material_id") or "").strip()
+            user_id = (row.get("user_id") or "").strip()
+            if not (material_id and solution):
+                continue
+            tips.append({
+                "material_id": material_id,
+                "user_id": user_id,
+                "title": f"{problem or material_id}：{solution[:20]}",
+                "points": json.dumps([solution], ensure_ascii=False),
+                "content": "问题：" + problem + chr(10) + "解决方案：" + solution + chr(10) + "适用场景：" + scenario,
+                "scenario": scenario,
+            })
+    print(f"从 deta/experiences.csv 导入 {len(tips)} 条预置社区经验")
+    return tips
+
+
 def load_cards() -> list[dict]:
     """读取 deta/cards/ 下所有 markdown 知识卡片。"""
     if not os.path.isdir(CARDS_DIR):
@@ -145,6 +177,19 @@ def main() -> None:
             db.add(Material(**m, created_at=datetime.now(), updated_at=datetime.now()))
         for c in load_cards():
             db.add(KnowledgeCard(**c))
+        # 预置社区经验：以 tip 卡片入库（ids 用 KC-TIP-P001 起，避免与动态 KC-TIP-10xx 冲突）
+        for i, tip in enumerate(load_preset_experiences(), start=1):
+            db.add(KnowledgeCard(
+                id=f"KC-TIP-P{i:03d}",
+                material_id=tip["material_id"],
+                card_type="tip",
+                title=tip["title"],
+                points=tip["points"],
+                content=tip["content"],
+                contributor_id=tip["user_id"],
+                helpful_count=0,
+                created_at=datetime.now(),
+            ))
         db.commit()
 
         # 同步重建向量索引（RAG 检索用）

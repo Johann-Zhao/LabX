@@ -5,6 +5,7 @@
 - 本地知识库 → 联网检索 → 通用经验 → 离线兜底，每答必标 provenance
 """
 import re
+import time
 
 import llm
 import rag
@@ -43,7 +44,37 @@ _OTHER_PHENOMENON_OPTION = "其他"  # 现象候选项兜底：只表示"不在�
 
 
 # 泛称词：不是具体物料，提取结果命中这些时视为未提取（"我的电机不转" ≠ 已告知物料）
-_GENERIC_MENTIONS = {"电机", "板子", "开发板", "传感器", "模块", "物料", "东西", "套件", "套装", "设备", "工具"}
+_GENERIC_MENTIONS = {
+    "电机", "板子", "开发板", "传感器", "模块", "物料", "东西", "套件", "套装", "设备", "工具",
+    "这个", "那个", "它", "这块", "那台", "这板子", "那板子", "这个板子", "那个板子", "这物料", "那物料",
+}
+
+# 指代/接续词：短消息命中且上一轮刚聊过某件物料 → 视为跟进该物料（跨轮次上下文）
+_FOLLOWUP_WORDS = ("它", "这个", "那个", "这块", "那台", "这", "那", "怎么接", "接线", "还能干嘛",
+                  "还能做什么", "怎么烧录", "怎么连", "引脚", "多少钱", "哪里借")
+
+# 会话状态最多保留 200 个 conv（内存演示规模，防长期运行越积越多）
+_MAX_CONV_STATES = 200
+
+
+def _clean_material_mention(value) -> str | None:
+    """把 LLM 提取的物料提及清洗成可用的名称/型号。
+
+    去掉"我的/这个/那块"这类前缀；整串只剩泛称或代词时视为未提取。
+    """
+    if value is None:
+        return None
+    mention = str(value).strip()
+    if not mention or len(mention) > 30:
+        return None
+    mention = re.sub(r"^(我的|我手上|我手里|这个|那个|这块|那台|这|那|一个|一台|一块)", "", mention)
+    mention = mention.strip("的。，, ？?！!")
+    if not mention or mention in _GENERIC_MENTIONS:
+        return None
+    # 只含指代词/方位词，不含真实名称（如"这板子""那个"）也视为未提取
+    if all(ch in "这那它个块台物料东西" for ch in mention):
+        return None
+    return mention
 
 
 def classify_intent(message: str) -> tuple[str, str | None]:
@@ -65,11 +96,7 @@ def classify_intent(message: str) -> tuple[str, str | None]:
         fallback=None,
     )
     data = parse_json_loose(raw) or {}
-    mention = data.get("material")
-    if mention:
-        mention = str(mention).strip()
-        if not mention or mention in _GENERIC_MENTIONS or len(mention) > 30:
-            mention = None
+    mention = _clean_material_mention(data.get("material"))
     intent = data.get("intent")
     if intent in INTENT_LABELS:
         return intent, mention
@@ -136,6 +163,69 @@ def _resolve_material_id(db, name: str, active_borrows: list[dict]) -> str | Non
     return best.id if best and best_score >= 2 else None
 
 
+# ---------- 槽位解析公共逻辑（排障/求用法共用，消除重复分支） ----------
+
+def _initial_material_slots(db, active_borrows: list[dict], message: str, mention: str | None,
+                            with_phenomenon: bool = False) -> dict:
+    """首次进入时解析物料槽位：借用清单优先 → 明确型号 → 目录弱匹配仅作猜测。"""
+    slots: dict = {}
+    target, score, from_borrows = _find_target_material(db, active_borrows, message)
+    if target is not None and (from_borrows or score >= 2):
+        slots["material_id"] = target.id
+    elif mention:
+        # 消息里已带具体型号且目录无此物料 → 直接按自带物料处理，不再问"是哪个物料"
+        slots["custom_material"] = mention
+    elif target is not None:
+        slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
+    if with_phenomenon:
+        slots["phenomenon"] = message if _has_concrete_phenomenon(message) else None
+    return slots
+
+
+def _material_clarify(state: dict, intent: str, message: str, slots: dict, steps: list,
+                      db, active_borrows: list[dict], question: str) -> dict:
+    """物料槽位缺失时发起澄清；候选 = 借用清单 + 目录猜测（猜的）+ 自有物料 + 逃生项。"""
+    options = [b["material_name"] for b in active_borrows]
+    guess_id = slots.get("guess_id")
+    if guess_id:
+        g = db.get(Material, guess_id)
+        if g and g.name not in options:
+            options.insert(0, f"{g.name}（猜的）")
+    options += [_SELF_OWNED_OPTION, _ESCAPE_OPTION]
+    return _clarify(state, intent, message, slots, "material", steps, options, question)
+
+
+def _remember_material(state: dict, intent: str, target, custom_material: str | None) -> None:
+    """记下本轮定位到的物料，供下一轮"它/这个/怎么接线"这类指代跟进使用。"""
+    if target is not None:
+        state["last"] = {"intent": intent, "material_id": target.id,
+                         "material_name": target.name, "custom_material": None}
+    elif custom_material:
+        state["last"] = {"intent": intent, "material_id": None,
+                         "material_name": custom_material, "custom_material": custom_material}
+    state["last_ts"] = time.time()
+
+
+def _followup_slots(state: dict, message: str) -> dict | None:
+    """短指代消息沿用上一轮物料上下文；不含指代词则返回 None（不强行接续）。"""
+    last = state.get("last")
+    if not last or len(message.strip()) > 20:
+        return None
+    if not any(w in message for w in _FOLLOWUP_WORDS):
+        return None
+    # 消息里出现目录物料具体特征时不要硬接上一轮（可能是新话题）
+    if message.strip() in _GENERIC_MENTIONS:
+        return None
+    slots = {}
+    if last.get("material_id"):
+        slots["material_id"] = last["material_id"]
+    if last.get("custom_material"):
+        slots["custom_material"] = last["custom_material"]
+    if last.get("intent") == "troubleshoot" and _has_concrete_phenomenon(message):
+        slots["phenomenon"] = message
+    return slots or None
+
+
 # ---------- 回答阶梯：本地 → 联网 → 通用 → 离线 ----------
 
 def _gen(system: str, user: str, max_tokens: int = 800) -> str | None:
@@ -168,6 +258,21 @@ _EXPLORE_FORMAT = (
 )
 
 
+def _web_refs(raw: str) -> list[dict]:
+    """从联网回答里提取引用：优先 markdown 链接，其次裸 URL。"""
+    refs: list[dict] = []
+    seen: set[str] = set()
+    for title, url in re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", raw):
+        if url not in seen:
+            seen.add(url)
+            refs.append({"card_id": None, "title": title.strip() or url.split("/")[2], "url": url})
+    for url in re.findall(r"https?://[^\s\)\]>\"，。]+", raw):
+        if url not in seen:
+            seen.add(url)
+            refs.append({"card_id": None, "title": url.split("/")[2] if "/" in url else url, "url": url})
+    return refs[:3]
+
+
 def _noop_status(text: str) -> None:
     """on_status 的默认实现：不做事（非流式调用无需任何改动）。"""
 
@@ -186,9 +291,19 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
     on_status = on_status or _noop_status
     system_role = role or "你是高校创新空间的排障/答疑专家。只根据给定的知识片段回答，语气直接、给操作指令，250 字以内。"
     fmt = answer_format or _ANSWER_FORMAT
-    query_text = search_query or (f"{target.name} {question}" if target else question)
+    if search_query:
+        query_text = search_query
+    elif target is not None:
+        query_text = f"{target.name} {question}"
+    elif custom_material:
+        query_text = f"{custom_material} {question}"
+    else:
+        query_text = question
+    # 备用检索词不宜太长：DuckDuckGo 对整段问题检索效果差，压到 80 字以内
+    search_text = re.sub(r"\s+", " ", query_text).strip()[:80]
 
-    # 1. 本地知识库：仅当型号对应（目录内物料）。自带物料无型号对应，直接跳过
+    # 1. 本地知识库：仅当型号对应（目录内物料）。
+    #    自带物料无型号对应，直接跳过；目录内物料检索未命中时也不拿其他物料卡片凑数。
     hits = []
     if custom_material:
         steps.append({"step": "自带物料，本地无对应型号", "detail": "跳过本地，直接联网检索"})
@@ -197,8 +312,6 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
         hits = rag.query(query_text, material_id=target.id if target else None, top_k=3)
         threshold = LOCAL_HIT_THRESHOLD_IN_MATERIAL if target else LOCAL_HIT_THRESHOLD_OPEN
         hits = [h for h in hits if h["score"] >= threshold]
-        if not hits and target:
-            hits = [h for h in rag.query(query_text, top_k=3) if h["score"] >= LOCAL_HIT_THRESHOLD_OPEN]
     if hits:
         # 引用卫生：只保留"与最高分同物料"或"分数接近最高分（≥60%）"的，防止无关卡片混入参考列表
         on_status("本地命中，正在整理回答…")
@@ -230,11 +343,10 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
     )
     if raw:
         steps.append({"step": "本地未收录，已联网检索", "detail": "DeepSeek 原生联网搜索（官方资料优先）"})
-        urls = re.findall(r"https?://[^\s\)\]>\"，。]+", raw)
-        refs = [{"card_id": None, "title": u.split("/")[2] if "/" in u else u, "url": u} for u in urls[:3]]
+        refs = _web_refs(raw)
         return raw, refs, "web"
     on_status("正在用备用渠道检索…")
-    results = web_search(query_text)
+    results = web_search(search_text)
     if results:
         steps.append({"step": "本地未收录，已联网检索", "detail": f"找到 {len(results)} 条网络资料（官方域名优先）"})
         snippets = "\n".join(f"- {r['title']}：{r['snippet']}" for r in results)
@@ -296,30 +408,12 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
     steps.append({"step": "确认借用上下文", "detail": f"你当前借用：{names}"})
 
     if slots is None:
-        # 首次进入：从消息里自动识别两个槽位
-        slots = {"material_id": None, "custom_material": None, "phenomenon": None, "guess_id": None}
-        target, score, from_borrows = _find_target_material(db, active, message)
-        if target is not None and (from_borrows or score >= 2):
-            slots["material_id"] = target.id
-        elif mention:
-            # 消息里已带具体型号且目录无此物料 → 直接按自带物料处理，不再问"是哪个物料"
-            slots["custom_material"] = mention
-        elif target is not None:
-            slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
-        if _has_concrete_phenomenon(message):
-            slots["phenomenon"] = message
+        slots = _initial_material_slots(db, active, message, mention, with_phenomenon=True)
 
     if allow_clarify:
         if not slots.get("material_id") and not slots.get("custom_material"):
-            options = [b["material_name"] for b in active]
-            guess_id = slots.get("guess_id")
-            if guess_id:
-                g = db.get(Material, guess_id)
-                if g and g.name not in options:
-                    options.insert(0, f"{g.name}（猜的）")
-            options += [_SELF_OWNED_OPTION, _ESCAPE_OPTION]
-            return _clarify(state, "troubleshoot", message, slots, "material", steps, options,
-                            "为了准确排查，先确认一下：是哪个物料？")
+            return _material_clarify(state, "troubleshoot", message, slots, steps, db, active,
+                                     "为了准确排查，先确认一下：是哪个物料？")
         if not slots.get("phenomenon"):
             return _clarify(state, "troubleshoot", message, slots, "phenomenon", steps,
                             _PHENOMENON_OPTIONS + [_ESCAPE_OPTION],
@@ -327,11 +421,20 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
 
     # ---- 槽位齐备（或用户选择直接回答）：组织最终问题并作答 ----
     target = db.get(Material, slots["material_id"]) if slots.get("material_id") else None
+    custom_material = slots.get("custom_material")
     question = message
-    if slots.get("custom_material"):
-        question += f"。用户自带物料：{slots['custom_material']}"
+    if custom_material:
+        question += f"。用户自带物料：{custom_material}"
     if slots.get("phenomenon") and slots["phenomenon"] != message:
         question += f"。具体现象：{slots['phenomenon']}"
+
+    # 诚实披露信息缺口：选了"直接回答"但槽位不全时，回答必须声明假设范围
+    if not target and not custom_material:
+        question += ("。注意：学生没有确认具体物料和现象，请给出通用排查方向，"
+                     "并在开头说明「因为还没确认具体物料，以下按常见情况排查」。")
+    elif not slots.get("phenomenon"):
+        question += ("。注意：学生没有描述具体现象，请按该物料最常见故障排查，"
+                     "并在开头说明「还没描述具体现象，以下按常见故障排查」。")
 
     if target:
         steps.append({"step": "定位故障物料", "detail": f"{target.name}（{target.id}）"})
@@ -341,15 +444,19 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
             else f"备件：{target.name} 暂时无库存，可到 {target.location} 登记等待"
         )
         steps.append({"step": "确认备件库存", "detail": spare_text})
-    elif slots.get("custom_material"):
-        steps.append({"step": "定位故障物料", "detail": f"用户自带物料「{slots['custom_material']}」（不在目录），按外部物料处理"})
+        _remember_material(state, "troubleshoot", target, None)
+    elif custom_material:
+        steps.append({"step": "定位故障物料", "detail": f"用户自带物料「{custom_material}」（不在目录），按外部物料处理"})
         spare_text = ""
+        _remember_material(state, "troubleshoot", None, custom_material)
     else:
         steps.append({"step": "定位故障物料", "detail": "未定位到物料，按通用排障处理"})
         spare_text = ""
 
+    search_query = f"{custom_material} 故障 排查 解决办法" if custom_material else None
     answer, refs, provenance = _ladder_answer(question, target, spare_text, names, steps,
-                                              custom_material=slots.get("custom_material"),
+                                              custom_material=custom_material,
+                                              search_query=search_query,
                                               on_status=on_status)
     return _resp(0, "ok", {
         "intent": "troubleshoot", "steps": steps,
@@ -373,45 +480,33 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
     steps.append({"step": "确认借用上下文", "detail": f"你当前借用：{names}"})
 
     if slots is None:
-        slots = {"material_id": None, "custom_material": None, "guess_id": None}
-        target, score, from_borrows = _find_target_material(db, active, message)
-        if target is not None and (from_borrows or score >= 2):
-            slots["material_id"] = target.id
-        elif mention:
-            # 消息里已带具体型号且目录无此物料 → 直接按自带物料处理，不再问"是哪个物料"
-            slots["custom_material"] = mention
-        elif target is not None:
-            slots["guess_id"] = target.id  # 全目录弱匹配，仅作猜测候选
+        slots = _initial_material_slots(db, active, message, mention)
 
     if allow_clarify and not slots.get("material_id") and not slots.get("custom_material"):
-        options = [b["material_name"] for b in active]
-        guess_id = slots.get("guess_id")
-        if guess_id:
-            g = db.get(Material, guess_id)
-            if g and g.name not in options:
-                options.insert(0, f"{g.name}（猜的）")
-        options += [_SELF_OWNED_OPTION, _ESCAPE_OPTION]
-        return _clarify(state, "explore", message, slots, "material", steps, options,
-                        "想给你讲讲用法，先确认一下：是哪个物料？")
+        return _material_clarify(state, "explore", message, slots, steps, db, active,
+                                 "想给你讲讲用法，先确认一下：是哪个物料？")
 
     # ---- 槽位齐备（或用户选择直接回答）：组织问题并作答 ----
     target = db.get(Material, slots["material_id"]) if slots.get("material_id") else None
+    custom_material = slots.get("custom_material")
     question = message
-    if slots.get("custom_material"):
-        question += f"。用户自带物料：{slots['custom_material']}"
+    if custom_material:
+        question += f"。用户自带物料：{custom_material}"
 
     if target:
         steps.append({"step": "定位物料", "detail": f"{target.name}（{target.id}）"})
         question += (f"。物料信息：{target.name}，型号 {target.model or '未知'}。"
                      f"{target.description or ''}".strip())
         search_query = f"{target.name} 入门教程 应用场景"
-    elif slots.get("custom_material"):
+        _remember_material(state, "explore", target, None)
+    elif custom_material:
         steps.append({"step": "定位物料",
-                      "detail": f"用户自带物料「{slots['custom_material']}」（不在目录），按外部物料处理"})
+                      "detail": f"用户自带物料「{custom_material}」（不在目录），按外部物料处理"})
         catalog_names = "、".join(m.name for m in db.query(Material).all())
         question += (f"\n实验室物料目录：{catalog_names}\n"
                      "如果某些用法需要搭配其他物料，优先提实验室现有的（确实配套才提，用目录里的准确名字）。")
-        search_query = f"{slots['custom_material']} 开发板 入门教程 应用场景"
+        search_query = f"{custom_material} 开发板 入门教程 应用场景"
+        _remember_material(state, "explore", None, custom_material)
     else:
         # 逃生项但没定位到物料：不做开放检索（会随机命中某件物料的卡片，答非所问）
         if active:
@@ -442,7 +537,7 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
 
     answer, refs, provenance = _ladder_answer(
         question, target, "", names, steps,
-        custom_material=slots.get("custom_material"),
+        custom_material=custom_material,
         role=_EXPLORE_ROLE, answer_format=_EXPLORE_FORMAT,
         search_query=search_query, on_status=on_status,
     )
@@ -460,22 +555,29 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
 _CHITCHAT_ROLE = "你是高校创新空间的助教，回答学生的通用问题，直接、简短，200 字以内。"
 _CHITCHAT_FORMAT = "输出格式：先用一句话直接回答问题，再给 2-4 条要点或建议（不要①最可能原因②排查清单的排障报告格式）。\n"
 
-# 纯打招呼：直接回应，不走检索阶梯（"你好"也联网搜索又慢又怪）
-_GREETINGS = ("你好", "您好", "在吗", "在么", "hi", "hello", "嗨", "谢谢", "早上好", "下午好", "晚上好", "你是谁")
+# 纯打招呼与自我介绍：直接回应，不走检索阶梯（"你好"也联网搜索又慢又怪）
+_GREETINGS = ("你好", "您好", "在吗", "在么", "hi", "hello", "嗨", "谢谢", "早上好", "下午好", "晚上好")
+_SELF_INTRO = ("你是谁", "你能做什么", "你会什么", "介绍一下自己", "你能干嘛", "你会干嘛", "介绍一下你")
 _GREETING_ANSWER = (
     "你好呀！我是 LabX 智能助手。可以跟我说这几类事："
     "①想做项目（如「我想做自动浇花装置」）→ 我出全链路方案并一键预约物料；"
     "②物料出故障（如「我的电机不转」）→ 我逐步排查；"
     "③手里有物料不知道怎么用（如「这块板子能做什么」）→ 我讲用法；"
     "④查库存（如「Arduino 还有吗」）。"
+    "除了这些，你也可以把我当学习搭子，问各种课程、技术和通用问题。"
 )
 
 
 def _chitchat(db, message: str, steps: list, on_status=None) -> dict:
-    """开放式问答：无槽位检查；纯打招呼直接回应，否则走回答阶梯（通用问答格式）。"""
+    """开放式问答：无槽位检查。
+
+    纯打招呼/自我介绍直接固定回应；其余问题走本地→联网→通用阶梯，
+    使用通用问答格式（不套排障报告），因此任何非标准化问题都能接住。
+    """
     text = message.strip().lower()
-    if len(message.strip()) <= 10 and any(g in text for g in _GREETINGS):
-        steps.append({"step": "闲聊", "detail": "打招呼，直接回应（不检索）"})
+    short = len(message.strip()) <= 12
+    if short and (any(g in text for g in _GREETINGS) or any(g in text for g in _SELF_INTRO)):
+        steps.append({"step": "闲聊", "detail": "打招呼/自我介绍，直接回应（不检索）"})
         return _resp(0, "ok", {
             "intent": "chitchat", "steps": steps,
             "answer": _GREETING_ANSWER, "references": [], "provenance": None, "clarify": None,
@@ -519,14 +621,16 @@ def _recommend(db, user_id: str, message: str, steps: list, on_status=None) -> d
     })
 
 
-def _inventory(db, message: str, steps: list) -> dict:
+def _inventory(db, message: str, steps: list, state: dict | None = None) -> dict:
     # 用特征二元组评分（"Arduino 还有吗" 能命中 "Arduino Uno 开发板"），全名包含/型号词也已含在评分里
     found = [m for m in db.query(Material).all() if score_material(m, message) >= 2]
     if found:
         steps.append({"step": "查询库存", "detail": "、".join(m.name for m in found)})
-        text = "\n".join(
+        text = chr(10).join(
             f"· {m.name}：可借 {m.available_quantity}/{m.total_quantity} 件，在 {m.location}" for m in found
         )
+        if state is not None and len(found) == 1:
+            _remember_material(state, "inventory", found[0], None)
     else:
         steps.append({"step": "查询库存", "detail": "没听清具体物料，未命中"})
         text = "你想查哪件物料？说个名字我帮你查，比如「Arduino 还有吗」。"
@@ -557,7 +661,7 @@ def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_cl
     if intent == "recommend":
         return _recommend(db, user_id, message, steps, on_status=on_status)
     if intent == "inventory":
-        return _inventory(db, message, steps)
+        return _inventory(db, message, steps, state)
     return _chitchat(db, message, steps, on_status=on_status)
 
 
@@ -569,7 +673,12 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
     on_status 为可选的流式状态回调（str → None），每个真实执行动作前调用
     （/api/agent/chat/stream 用它推过程状态，非流式调用传 None 即可）。
     """
+    if conv_id not in _CONV and len(_CONV) >= _MAX_CONV_STATES:
+        # 内存演示规模：只保留最近活跃的会话状态，防止长期运行越积越多
+        oldest = min(_CONV.items(), key=lambda kv: kv[1].get("last_ts", 0) or 0)[0]
+        _CONV.pop(oldest, None)
     state = _CONV.setdefault(conv_id, {})
+    state["last_ts"] = time.time()
     pending = state.pop("pending", None)
     if pending:
         slots = pending.get("slots") or {}
@@ -615,5 +724,14 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
         return _dispatch(db, user_id, original, steps, state,
                          allow_clarify=True, forced_intent=pending["intent"], slots=slots,
                          on_status=on_status)
+    # 跨轮次上下文：短指代消息（"那怎么接线""它还能干嘛"）沿用上一轮定位到的物料
+    followup = _followup_slots(state, message)
+    if followup and state.get("last", {}).get("intent") in ("troubleshoot", "explore"):
+        last = state["last"]
+        steps = [{"step": "上下文接续", "detail": f"沿用上一轮物料「{last['material_name']}」"}]
+        return _dispatch(db, user_id, message, steps, state,
+                         allow_clarify=True, forced_intent=last["intent"], slots=followup,
+                         on_status=on_status)
+
     return _dispatch(db, user_id, message, [], state, allow_clarify=True, forced_intent=None,
                      on_status=on_status)

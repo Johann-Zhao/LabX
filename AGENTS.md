@@ -90,13 +90,14 @@ cd frontend && npm run dev        # http://localhost:5173，/api 由 vite proxy 
 - [x] 前端第八轮（开屏 1:1 仿 deepseek.com/harness 首屏动画）：开屏改为单屏自动播放，固定深色暗场（组件局部 data-theme=dark，应用主题不受影响）；背景三层对齐原站——软绿光晕漂移 + Seedream 5.0 Pro 生成 hero-dark.png（黑底荧光绿抽象X+粒子轨道，screen 混合、9s 呼吸、鼠标视差）+ 90px 规则点阵 canvas（30fps、鼠标140px斥力、静止自动停帧）；内容四块复刻 ds-hero-enter（opacity+translateY+blur 依次入场，视觉图 1.8s blur(20px)→0）；右栏终端 tab 切换（快速开始/能力清单）+ 复制按钮 + mono 绿色 `$` 前缀；保留跳过/Esc/未登录落 /login/reduced-motion 降级；规范文档 §8 豁免扩展、§15 登记；`npm run build` + Playwright 1440×900/375×667 实测通过（截图存 `deta/shots/intro-harness-*`，未入库）
 - [x] 前端第九轮（开屏每次登录播放）：按队长要求移除 labx_intro_seen 仅首次标记——IntroOverlay 初始不播，watch(currentUser.role) 空→非空（登录成功）时 replay 整段开屏；App.vue 取消 /admin 排除（学生/管理员登录都播）；重播时重置终端tab/复制态/图片加载态/点阵状态，nextTick 后再起 canvas；已登录刷新不重播；规范文档 §16 登记；Playwright 实测学生登录/管理员登录/跳过/刷新不重播全通过（截图存 `deta/shots/intro-every-login-student.png`，未入库）
 - [x] 前端第十轮（多屏开屏 + 登录前播放 + 学生向文案）：按队长三点反馈重做——开屏改 6 屏滚动叙事（hero + 为什么LabX + 物料流转 + 知识随行 + 智能助手 + 登录CTA），IntersectionObserver 滚入淡入 + 6节点进度轨，首屏副按钮"往下看"；播放时机改登录前（未登录进入即播、结束落 /login，sessionStorage 防同标签页重复、登出清除标记重播）；删除 npm/uvicorn/labx@console/GitHub 等开发者向内容，终端改学生动线与一句话能力；Seedream 5.0 Pro 新增 scene-dark-1/2/3 三张暗场绿色调场景图；规范文档 §8 豁免更新、§17 登记；`npm run build` + Playwright 1440×900/375×667 实测通过（截图存 `deta/shots/intro-multipage-*`，未入库）
+- [x] 收尾轮（智能助手逻辑加固 + MCP 收敛 + 演示准备）：①orchestrator 物料提及清洗（去"我的/这个/那块"前缀）、跨轮次上下文（"那怎么接线"沿用上一轮物料）、本地检索严格型号对应（目标物料无卡片不再拿其他物料凑数）、逃生项诚实披露信息缺口、DuckDuckGo 检索词压 80 字、markdown 引用优先提取、纯打招呼/自我介绍固定快回；②db.py 新增 session_scope，MCP 三 server 统一上下文管理并复用 services.material_to_dict；③services 权限历史只算 active/returned（驳回申请不再算"借过"）；④`deta/experiences.csv` 5 条预置社区经验 + init_db 灌入（借 DHT22 推送首位即"前一位同学提醒"）；⑤新增 `scripts/start_demo.sh/.bat` 一键启动与 `scripts/preflight.py` 展示前自检；⑥AskPage 右轨管理台仅管理员可见 + 去残留英文 USER；⑦`docs/agent-workflow.md` 收尾修订登记；⑧`deta/checklist.md` 最终展示清单。实际 LLM 回归：你好/你能做什么/库存/1+1/排障澄清/BOM/跨轮次跟进全通过，preflight 全 PASS，UI Playwright 无报错
 - [ ] 阶段 4：演示数据灌满 + 全流程测试 + 部署固化 + 录视频 ← **当前在这里**
 
 **阶段 4 待办细节**（做完划掉）：
 1. ~~物料照片：Seedream 批量生成~~ ✅ 已完成（15 张物料图 + 4 张开屏视觉，存 `deta/images/` 并拷 `frontend/public/`，前端已挂图；生成脚本 `backend/scripts/seedream_gen.py`/`seedream_batch.py`，教训：请求体必须加 `output_format:"png"` 否则默认返回 JPEG）
-2. 3 个往期项目（含 BOM、心得、照片）+ 5 条预置社区经验（写进 deta/，init_db 灌入）
+2. 3 个往期项目（含 BOM、心得、照片）~~+ 5 条预置社区经验~~ ✅ 5 条经验已完成（`deta/experiences.csv`，init_db 自动灌入）；3 个往期项目仍待补
 3. 故障博物馆：烧坏的 Arduino 实物 + 手写"死因卡"（线下道具，队长/队员准备）
-4. 全流程测试 checklist（存 `deta/checklist.md`）真机走三遍：借还、问答、BOM、排障、归还、换账号
-5. 部署固化：一台笔记本跑全部服务 + 启动脚本；断网演示预案（`LABX_LLM_MOCK=true`）
+4. 全流程测试 checklist：✅ 清单已存 `deta/checklist.md`；真机走三遍（借还、问答、BOM、排障、归还、换账号）待执行
+5. 部署固化：一台笔记本跑全部服务 + 启动脚本 ✅（`scripts/start_demo.sh` / `start_demo.bat` / `preflight.py`）；断网演示预案（`LABX_LLM_MOCK=true`）已具
 6. 录制完整演示视频（防现场翻车）+ 5 分钟剧本排练
 7. ~~前端美化~~ ✅ 已由"UI/UX 重构"完成（设计系统、大屏双栏适配、开屏动效、消息动效）；语音输入留到后续（输入栏已留麦克风占位按钮）

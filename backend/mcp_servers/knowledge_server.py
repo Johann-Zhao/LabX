@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastmcp import FastMCP
 
-from db import KnowledgeCard, SessionLocal
+from db import KnowledgeCard, session_scope
 from services import ask_core, experience_core
 
 mcp = FastMCP("knowledge-mcp")
@@ -20,8 +20,7 @@ mcp = FastMCP("knowledge-mcp")
 @mcp.tool()
 def get_knowledge_card(material_id: str, card_type: str = "") -> list[dict]:
     """获取指定物料的知识卡片。card_type 可过滤：manual/quickstart/common_errors/tip。"""
-    db = SessionLocal()
-    try:
+    with session_scope() as db:
         q = db.query(KnowledgeCard).filter(KnowledgeCard.material_id == material_id)
         if card_type:
             q = q.filter(KnowledgeCard.card_type == card_type)
@@ -35,8 +34,6 @@ def get_knowledge_card(material_id: str, card_type: str = "") -> list[dict]:
             }
             for c in q.all()
         ]
-    finally:
-        db.close()
 
 
 @mcp.tool()
@@ -48,11 +45,8 @@ def query_knowledge_base(question: str, material_id: str | None = None) -> dict:
 @mcp.tool()
 def share_experience(material_id: str, user_id: str, content: str) -> dict:
     """提交使用经验：LLM 结构化后写入该物料的社区经验（tip 卡片），并同步向量库。"""
-    db = SessionLocal()
-    try:
+    with session_scope() as db:
         return experience_core(db, material_id, user_id, content)
-    finally:
-        db.close()
 
 
 if __name__ == "__main__":

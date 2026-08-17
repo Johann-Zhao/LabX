@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status, hash_password
-from services import ask_core, batch_borrow_core, borrow_core, create_material_core, experience_core, recommend_bom_core, return_core, review_borrow_core
+from services import ask_core, batch_borrow_core, borrow_core, create_material_core, experience_core, material_to_dict, recommend_bom_core, return_core, review_borrow_core
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
@@ -118,20 +118,6 @@ def iso(dt) -> str | None:
     return dt.isoformat() if dt else None
 
 
-def material_dict(m: Material) -> dict:
-    return {
-        "material_id": m.id,
-        "name": m.name,
-        "model": m.model,
-        "category": m.category,
-        "access_level": m.access_level,
-        "total_quantity": m.total_quantity,
-        "available_quantity": m.available_quantity,
-        "location": m.location,
-        "description": m.description,
-    }
-
-
 def record_dict(r: BorrowRecord, material_name: str, user_name: str | None = None) -> dict:
     return {
         "record_id": r.id,
@@ -167,7 +153,7 @@ def list_materials(keyword: str = "", category: str = "", db: Session = Depends(
         q = q.filter(Material.name.like(like) | Material.model.like(like))
     if category:
         q = q.filter(Material.category == category)
-    return ok("ok", [material_dict(m) for m in q.all()])
+    return ok("ok", [material_to_dict(m) for m in q.all()])
 
 
 @app.post("/api/materials")
@@ -185,7 +171,7 @@ def get_material(material_id: str, db: Session = Depends(get_db)):
         return err(404, f"物料 {material_id} 不存在")
     cards = db.query(KnowledgeCard).filter(KnowledgeCard.material_id == material_id).all()
     return ok("ok", {
-        **material_dict(m),
+        **material_to_dict(m),
         "knowledge_cards": [
             {"card_id": c.id, "card_type": c.card_type, "title": c.title} for c in cards
         ],

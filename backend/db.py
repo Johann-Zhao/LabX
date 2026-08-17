@@ -7,6 +7,7 @@
 """
 import hashlib
 import os
+from contextlib import contextmanager
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
@@ -18,6 +19,16 @@ DB_PATH = os.path.join(BASE_DIR, "labx.db")
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
+
+
+@contextmanager
+def session_scope():
+    """统一数据库会话上下文：MCP 工具/脚本与短生命周期逻辑共用，避免漏 close。"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 class Material(Base):

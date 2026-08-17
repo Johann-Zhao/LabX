@@ -43,12 +43,15 @@ const CAPABILITIES = [
   { code: 'C4', name: '经验闭环', desc: '归还心得沉淀为可检索的社区经验', prompt: '这块板子能做什么' },
 ]
 
-// 快捷功能（右轨）：mono 序号 + 路由链接
-const QUICK_LINKS = [
-  { idx: '01', to: '/materials', label: '去借物料' },
-  { idx: '02', to: '/records', label: '我的借用' },
-  { idx: '03', to: '/admin', label: '管理台' },
-]
+// 快捷功能（右轨）：mono 序号 + 路由链接；管理台仅管理员可见
+const QUICK_LINKS = computed(() => {
+  const links = [
+    { idx: '01', to: '/materials', label: '去借物料' },
+    { idx: '02', to: '/records', label: '我的借用' },
+  ]
+  if (currentUser.role === 'admin') links.push({ idx: '03', to: '/admin', label: '管理台' })
+  return links
+})
 
 // 右轨"在借件数"：null = 未取到（静默降级，该行不显示）
 const borrowingCount = ref(null)
@@ -473,7 +476,7 @@ async function scrollToBottom() {
       <section class="rail-sec">
         <div class="sec-head">
           <span>当前用户</span>
-          <span class="sec-tag lx-num">USER</span>
+          <span class="sec-tag lx-num">用户</span>
         </div>
         <div class="user-name">{{ currentUser.name }}</div>
         <div class="user-id lx-num">学号 {{ currentUser.id }}</div>

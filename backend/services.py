@@ -21,6 +21,21 @@ def _resp(code: int, msg: str, data=None) -> dict:
     return {"code": code, "msg": msg, "data": data}
 
 
+def material_to_dict(m: Material) -> dict:
+    """物料基础字段序列化：REST 列表/详情与 material-mcp 共用一份。"""
+    return {
+        "material_id": m.id,
+        "name": m.name,
+        "model": m.model,
+        "category": m.category,
+        "access_level": m.access_level,
+        "total_quantity": m.total_quantity,
+        "available_quantity": m.available_quantity,
+        "location": m.location,
+        "description": m.description,
+    }
+
+
 def parse_json_loose(raw: str | None) -> dict | None:
     """从 LLM 输出里宽松提取第一个 JSON 对象（容忍前后废话和 ```json 围栏）。"""
     if not raw:
@@ -85,7 +100,10 @@ def check_permission_core(db: Session, user_id: str, material_id: str) -> dict:
         borrowed_categories = (
             db.query(Material.category)
             .join(BorrowRecord, BorrowRecord.material_id == Material.id)
-            .filter(BorrowRecord.user_id == user_id)
+            .filter(
+                BorrowRecord.user_id == user_id,
+                BorrowRecord.status.in_(["active", "returned"]),  # 只算真借过/在借，审核驳回不算
+            )
             .all()
         )
         if m.category not in {c for (c,) in borrowed_categories}:
