@@ -100,7 +100,7 @@ onMounted(async () => {
 
   <router-view />
 
-  <!-- 开屏介绍动画：每次登录成功后播放（组件监听 currentUser.role 空→非空；学生/管理都播） -->
+  <!-- 开屏介绍动画：登录前播放（组件在未登录进入时播放，登出回登录前再播） -->
   <IntroOverlay />
 </template>
 
