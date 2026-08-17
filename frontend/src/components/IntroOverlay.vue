@@ -1,32 +1,25 @@
 <script setup>
 // ==========================================================================
-// IntroOverlay —— 开屏滚动叙事页（学生端首次访问全屏播放）
-// 2026 重做：仿 deepseek.com/harness 的"控制台化"动画风格（终端卡片 +
-// 点阵粒子 + 流动波纹 + 微动效），但全套走浅色令牌（贴合项目浅色主基调，
-// 不再强制 data-theme="dark"；跟随应用主题，默认浅色即浅色开屏）。
+// IntroOverlay —— 单屏开屏动画（第八轮）
+// 1:1 仿 deepseek.com/harness 首屏的动画语言：
+//   - 深色暗场 + 规则 90px 点阵 canvas（鼠标斥力、静止自动停帧）
+//   - Seedream 5.0 Pro 生成的视觉图 screen 混合 + 缓慢呼吸 + 轻微鼠标视差
+//   - 左文右终端，内容分块 opacity + translateY + blur 依次入场
+//   - 终端卡片：tab 切换 + mono 绿色 $ 前缀 + 复制按钮
 //
-// 规则（队长拍板）：
+// 交互规则沿用队长拍板：
 // - 仅首次访问播放：localStorage 键 labx_intro_seen=1 标记已看；
 //   /admin 不渲染本组件（App.vue 控制）；/login 允许播放（首访流程：动画 → 登录页）。
-// - 5 屏滚动叙事：用户滚动驱动画面变化（类似 Apple 产品页）。滚动发生在
-//   overlay 自己的滚动容器里，GSAP ScrollTrigger 的 scroller 指向它。
-// - 右上角常驻"跳过"，Esc 也可跳过；不提供"点击任意处跳过"（与滚动冲突）。
-// - prefers-reduced-motion：不建 ScrollTrigger、不起 canvas、不起波纹，
-//   5 屏静态纵向堆叠，可正常滚动浏览（所有"初始隐藏"只由 GSAP 内联样式实现，
-//   不建动画时内容天然全可见）。
-// - 图片加载失败 @error 隐藏 <img>，只留文字 + 粒子背景（优雅降级）。
-// - 注意：visible=false 只是收起模板，组件本体并不卸载，onBeforeUnmount
-//   不一定触发——所有清理（含恢复 body 滚动）必须在 finish() 里就做掉。
-// - 设计规范红线 9/14（禁滚动提示、禁循环动画）对本开屏豁免：这是队长
-//   明确要的滚动叙事仪式感页面，普通页面仍按 docs/design/labx-ui.md 执行。
+// - 右上角"跳过"、Esc、主按钮均可结束；结束淡出 400ms 后移除 DOM。
+// - prefers-reduced-motion：不起 canvas、不建循环动画，所有内容静态直接可见。
+// - 视觉图加载失败 @error 隐藏图片，只留暗场光晕 + 点阵（优雅降级）。
+// - 组件 visible=false 只收起模板，本体不卸载：清理必须集中在 cleanupAll()。
+// - 开屏豁免（docs/design/labx-ui.md 第 8 节）：本页允许循环氛围动画与
+//   叙事假终端；本次为对齐 harness 固定深色开屏（应用主题不受影响）。
 // ==========================================================================
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { gsap } from 'gsap'
-import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { currentUser } from '../store'
-
-gsap.registerPlugin(ScrollTrigger)
 
 const router = useRouter()
 
@@ -38,210 +31,278 @@ try {
   visible.value = false // 隐私模式等异常：不挡路，直接进主界面
 }
 
-// ---------- 5 屏内容 ----------
-// 屏 2-4 的场景文案（屏 1 主视觉、屏 5 进入屏结构特殊，直接写在模板里）
-const scenes = [
-  {
-    img: '/intro/scene1.png',
-    hud: '01 / 物料流转',
-    title: '每一件物料，都有去处',
-    text: '借用记录即去向，不贴标签也能追踪',
-  },
-  {
-    img: '/intro/scene2.png',
-    hud: '02 / 知识随行',
-    title: '每一次借用，都带来该学的知识',
-    text: '借什么就推什么的说明书与避坑卡',
-  },
-  {
-    img: '/intro/scene3.png',
-    hud: '03 / 经验闭环',
-    title: '每一次归还，经验都留给下一个人',
-    text: '归还心得沉淀进社区，越用越聪明',
-  },
-]
-// 屏 5 的三张能力卡
-const cards = [
-  { title: '愿望到方案', text: '说个想法，给你完整物料清单和实施步骤，在库物料一键预约' },
-  { title: '智能排障', text: '电机不转？一步步带你排查，优先用实验室沉淀的经验' },
-  { title: '物料求用法', text: '手里有板子不知道能干嘛？问它是什么、能做什么、怎么上手' },
-]
-const PANEL_COUNT = 5 // 进度轨节点数 = 屏数
-const activePanel = ref(0) // 当前屏下标，驱动进度轨高亮
-
-// img 加载失败时对应路径记入 failedImgs，模板里 v-if 隐藏图片（优雅降级）
-const failedImgs = ref(new Set())
-const onImgError = (src) => { failedImgs.value = new Set(failedImgs.value).add(src) }
-// 图片加载完成后高度才确定，刷新一次 ScrollTrigger 让 scrub 区间重新测量
-const onImgLoad = () => { if (!reducedMotion) ScrollTrigger.refresh() }
-
-// 系统开了"减少动态效果"：不建 ScrollTrigger、不起 canvas、不起波纹
+// 系统开"减少动态效果"：不建 canvas、不起循环动画
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+// 精细指针设备才做鼠标交互（触屏只画一帧静态点阵，不监听移动）
+const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches
+
+// ---------- 终端卡片数据 ----------
+const TERM_TABS = [
+  {
+    id: 'quick',
+    label: '快速开始',
+    title: 'labx@console',
+    lines: [
+      { prompt: true, text: 'cd LabX && npm run dev' },
+      { prompt: true, text: 'uvicorn main:app' },
+      { prompt: true, text: '登录学生号 2024001 / 123456' },
+      { ok: true, text: '✓ 前端 5173 · 后端 8000 在线' },
+    ],
+  },
+  {
+    id: 'powers',
+    label: '能力清单',
+    title: 'labx@console',
+    lines: [
+      { prompt: true, text: '借物料 → 自动推知识卡' },
+      { prompt: true, text: '说现象 → 五步排障 + 经验溯源' },
+      { prompt: true, text: '说愿望 → BOM 清单 + 在库预约' },
+      { ok: true, text: '✓ 15 件物料 · 33 张卡片 · 闭环已通' },
+    ],
+  },
+]
+const activeTermId = ref('quick')
+const activeTerm = computed(() => TERM_TABS.find((t) => t.id === activeTermId.value) || TERM_TABS[0])
+const copied = ref(false)
+let copyTimer = 0
+
+// 复制当前终端命令；clipboard 失败时降级为隐藏 textarea + execCommand
+async function copyTerminal() {
+  const text = activeTerm.value.lines
+    .map((l) => (l.prompt ? `$ ${l.text}` : l.text))
+    .join('\n')
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      throw new Error('clipboard unavailable')
+    }
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+  copied.value = true
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copied.value = false }, 1600)
+}
 
 // ---------- 收尾 ----------
-const leaving = ref(false) // 淡出中：加 class 播 400ms 渐隐，再收起 DOM
+const leaving = ref(false)
 let leaveTimer = 0
 
-// 统一清理：杀 ScrollTrigger、停 canvas、移监听、恢复 body 滚动。
-// finish() 和 onBeforeUnmount 都会调它，幂等。
+// 统一清理：停 canvas、移监听、恢复 body 滚动。finish() 与 onBeforeUnmount 都调用，幂等。
 function cleanupAll() {
-  if (gsapCtx) {
-    gsapCtx.revert() // 还原所有 GSAP 动画与 ScrollTrigger（含内联样式）
-    gsapCtx = null
-  }
   stopCanvas()
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', onResize)
-  // 组件不会真卸载，onBeforeUnmount 不一定触发——必须在这里就恢复主界面滚动
+  window.removeEventListener('pointermove', onPointerMove)
   document.body.style.overflow = ''
 }
 
-// 标记已看 + 清理 + 播整体淡出后收起 overlay；未登录则收尾落到登录页（首访流程：动画 → 登录）
+// 标记已看 + 清理 + 淡出后收起；未登录收尾落登录页（首访流程：动画 → 登录）
 function finish() {
   if (leaving.value) return // 防 Esc/按钮连点重复触发
   try { localStorage.setItem('labx_intro_seen', '1') } catch { /* 写不进就算了 */ }
   cleanupAll()
   leaving.value = true
   if (!currentUser.role) router.push('/login') // 已登录则原地不动
-  // 等淡出动画（--lx-duration-slow 400ms）结束后再移除 DOM
   leaveTimer = setTimeout(() => { visible.value = false }, 400)
 }
 
-// ---------- 滚动叙事动画（GSAP ScrollTrigger） ----------
-const scrollerRef = ref(null)
-let gsapCtx = null
-
-function initScrollFx() {
-  const scroller = scrollerRef.value
-  if (!scroller) return
-  // context 作用域限定在滚动容器内选元素；revert() 可一键清掉全部动画
-  gsapCtx = gsap.context(() => {
-    // 屏 1：进场播一次（非滚动驱动），之后随滚动淡出上移
-    gsap.from('.hero-inner > *', {
-      opacity: 0, y: 32, duration: 1, ease: 'power2.out', stagger: 0.12,
-    })
-    gsap.to('.hero-inner', {
-      y: -80, opacity: 0.15, ease: 'none',
-      scrollTrigger: { scroller, trigger: '.panel-hero', start: 'top top', end: 'bottom top', scrub: true },
-    })
-    gsap.fromTo('.hero-img',
-      { scale: 1.05 },
-      {
-        scale: 1, ease: 'none',
-        scrollTrigger: { scroller, trigger: '.panel-hero', start: 'top top', end: 'bottom top', scrub: true },
-      })
-
-    // 屏 2-4：图片 scale 1.05→1 + 上下视差；HUD/标题/小字淡入上移
-    gsap.utils.toArray('.panel-scene').forEach((panel) => {
-      const img = panel.querySelector('.panel-img')
-      if (img) {
-        gsap.fromTo(img,
-          { scale: 1.05, y: -40 },
-          {
-            scale: 1, y: 40, ease: 'none',
-            // 从"屏顶进入视口底"到"屏底离开视口顶"全程 scrub
-            scrollTrigger: { scroller, trigger: panel, start: 'top bottom', end: 'bottom top', scrub: true },
-          })
-      }
-      gsap.fromTo(panel.querySelectorAll('.hud, .hud-line, .scene-title, .scene-text'),
-        { opacity: 0, y: 36 },
-        {
-          opacity: 1, y: 0, stagger: 0.1, ease: 'none',
-          scrollTrigger: { scroller, trigger: panel, start: 'top 78%', end: 'top 38%', scrub: true },
-        })
-    })
-
-    // 屏 5：三张能力卡 + 进入按钮随滚动依次浮入
-    gsap.fromTo('.panel-enter .cap-card, .panel-enter .enter-btn',
-      { opacity: 0, y: 48 },
-      {
-        opacity: 1, y: 0, stagger: 0.12, ease: 'none',
-        scrollTrigger: { scroller, trigger: '.panel-enter', start: 'top 82%', end: 'top 35%', scrub: true },
-      })
-
-    // 进度轨：屏中心区间被激活时高亮对应节点
-    gsap.utils.toArray('.panel').forEach((panel, i) => {
-      ScrollTrigger.create({
-        scroller,
-        trigger: panel,
-        start: 'top center',
-        end: 'bottom center',
-        onToggle: (self) => { if (self.isActive) activePanel.value = i },
-      })
-    })
-  }, scroller)
+// 副按钮：切到"能力清单" tab（真实交互，非摆设）
+function showPowers() {
+  activeTermId.value = 'powers'
 }
 
-// ---------- canvas 点阵粒子背景（浅色化：淡绿小点 + 微弱连线，仿 harness 点阵） ----------
+// ---------- 90px 规则点阵 canvas（仿 harness：30fps、鼠标 140px 斥力、静止停帧） ----------
+const overlayRef = ref(null)
 const canvasRef = ref(null)
-let ctx = null
+let gridCtx = null
 let rafId = 0
-let particles = []
-let lineColor = 'rgba(39, 121, 79, ' // 兜底：浅色 --lx-green #27794f
+let dots = []
+let cols = 0
+let rows = 0
+let canvasW = 0
+let canvasH = 0
+let lastFrame = 0
+let settled = false
+let mouseX = NaN
+let mouseY = NaN
+let gridRgb = '244, 244, 245' // 兜底：深色主题近白 #f4f4f5
+const SPACING = 90
+const TOUCH_RADIUS = 140
+const FRAME_MS = 1000 / 30
 
-function particleCount() {
-  const w = window.innerWidth
-  if (w < 768) return 28 // 手机降档，省电不卡
-  if (w < 1280) return 52
-  return 76
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16)
+  if (Number.isNaN(n)) return null
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`
 }
 
-function initParticles() {
+function readGridColor() {
   const canvas = canvasRef.value
   if (!canvas) return
-  canvas.width = window.innerWidth
-  canvas.height = window.innerHeight
-  particles = Array.from({ length: particleCount() }, () => ({
-    x: Math.random() * canvas.width,
-    y: Math.random() * canvas.height,
-    vx: (Math.random() - 0.5) * 0.3, // 缓慢漂移（比星座更静，贴近 harness 的低干扰感）
-    vy: (Math.random() - 0.5) * 0.3,
-    r: Math.random() * 1.3 + 0.6,
-  }))
+  const styles = getComputedStyle(canvas)
+  const primary = styles.getPropertyValue('--lx-text-primary').trim()
+  if (primary.startsWith('#')) {
+    const rgb = hexToRgb(primary)
+    if (rgb) gridRgb = rgb
+  }
 }
 
-function drawFrame() {
+function buildDots() {
   const canvas = canvasRef.value
-  if (!canvas || !ctx) return
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  if (!canvas) return
+  canvasW = canvas.clientWidth || window.innerWidth
+  canvasH = canvas.clientHeight || window.innerHeight
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  canvas.width = Math.round(canvasW * dpr)
+  canvas.height = Math.round(canvasH * dpr)
+  if (gridCtx) gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-  // 粒子漂移 + 出界回绕
-  for (const p of particles) {
-    p.x += p.vx
-    p.y += p.vy
-    if (p.x < 0) p.x = canvas.width
-    if (p.x > canvas.width) p.x = 0
-    if (p.y < 0) p.y = canvas.height
-    if (p.y > canvas.height) p.y = 0
+  // 90px 方格均匀铺满，整体居中（与 harness 相同的布局算法）
+  cols = Math.ceil(canvasW / SPACING) + 1
+  rows = Math.ceil(canvasH / SPACING) + 1
+  const offsetX = (canvasW - (cols - 1) * SPACING) / 2
+  const offsetY = (canvasH - (rows - 1) * SPACING) / 2
+  dots = []
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = offsetX + c * SPACING
+      const y = offsetY + r * SPACING
+      dots.push({ restX: x, restY: y, x, y, vx: 0, vy: 0 })
+    }
+  }
+}
+
+function drawGridFrame(now) {
+  if (reducedMotion || !gridCtx || !canvasRef.value) return
+  if (now - lastFrame < FRAME_MS) {
+    rafId = requestAnimationFrame(drawGridFrame)
+    return
+  }
+  lastFrame = now - ((now - lastFrame) % FRAME_MS)
+
+  const canvas = canvasRef.value
+  if (canvas.clientWidth !== canvasW || canvas.clientHeight !== canvasH) {
+    buildDots()
   }
 
-  // 微弱连线：距离近的粒子连线，越近越淡（浅色底上压低存在感）
-  const LINK = 100
-  for (let i = 0; i < particles.length; i++) {
-    for (let j = i + 1; j < particles.length; j++) {
-      const dx = particles[i].x - particles[j].x
-      const dy = particles[i].y - particles[j].y
+  gridCtx.clearRect(0, 0, canvasW, canvasH)
+
+  // 物理：鼠标 140px 内斥力 + 回位弹簧 + 速度衰减
+  let maxSpeed = 0
+  for (const p of dots) {
+    const dx = p.x - mouseX
+    const dy = p.y - mouseY
+    const dist = Math.hypot(dx, dy)
+    if (dist < TOUCH_RADIUS && dist > 0.1) {
+      const force = (1 - dist / TOUCH_RADIUS) * 30
+      const ux = dx / dist
+      const uy = dy / dist
+      p.vx += ux * force * 0.1
+      p.vy += uy * force * 0.1
+    }
+    const springX = p.restX - p.x
+    const springY = p.restY - p.y
+    p.vx += 0.05 * springX
+    p.vy += 0.05 * springY
+    p.vx *= 0.85
+    p.vy *= 0.85
+    p.x += p.vx
+    p.y += p.vy
+    maxSpeed = Math.max(maxSpeed, Math.abs(p.vx) + Math.abs(p.vy))
+  }
+
+  // 相邻点之间画短线段（两端各留 10px，与 harness 相同的断线点阵）
+  gridCtx.strokeStyle = `rgba(${gridRgb}, 0.08)`
+  gridCtx.lineWidth = 0.5
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const a = dots[r * cols + c]
+      const b = dots[r * cols + c + 1]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
       const dist = Math.hypot(dx, dy)
-      if (dist < LINK) {
-        ctx.strokeStyle = lineColor + (0.16 * (1 - dist / LINK)).toFixed(3) + ')'
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(particles[i].x, particles[i].y)
-        ctx.lineTo(particles[j].x, particles[j].y)
-        ctx.stroke()
-      }
+      if (dist < 20) continue
+      const ux = dx / dist
+      const uy = dy / dist
+      gridCtx.beginPath()
+      gridCtx.moveTo(a.x + 10 * ux, a.y + 10 * uy)
+      gridCtx.lineTo(b.x - 10 * ux, b.y - 10 * uy)
+      gridCtx.stroke()
+    }
+  }
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows - 1; r++) {
+      const a = dots[r * cols + c]
+      const b = dots[(r + 1) * cols + c]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const dist = Math.hypot(dx, dy)
+      if (dist < 20) continue
+      const ux = dx / dist
+      const uy = dy / dist
+      gridCtx.beginPath()
+      gridCtx.moveTo(a.x + 10 * ux, a.y + 10 * uy)
+      gridCtx.lineTo(b.x - 10 * ux, b.y - 10 * uy)
+      gridCtx.stroke()
     }
   }
 
-  // 画点
-  for (const p of particles) {
-    ctx.fillStyle = lineColor + '0.5)'
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
-    ctx.fill()
+  // 点：基础 1.8px 小方块，鼠标靠近时变大变亮（与 harness 相同）
+  gridCtx.fillStyle = `rgba(${gridRgb}, 0.16)`
+  for (const p of dots) {
+    let half = 1.8
+    let alpha = 0.16
+    if (!Number.isNaN(mouseX) && !Number.isNaN(mouseY)) {
+      const dx = p.x - mouseX
+      const dy = p.y - mouseY
+      const dist = Math.hypot(dx, dy)
+      const glow = Math.max(0, 1 - dist / TOUCH_RADIUS)
+      half = 1.8 + 2 * glow
+      alpha = 0.16 + 0.4 * glow
+    }
+    gridCtx.globalAlpha = alpha
+    const side = half * 2
+    gridCtx.fillRect(p.x - half, p.y - half, side, side)
   }
+  gridCtx.globalAlpha = 1
 
-  rafId = requestAnimationFrame(drawFrame)
+  // 静止（最大速度 < 0.01）就停帧省电；指针移动时再 kick 唤醒
+  if (maxSpeed < 0.01) {
+    settled = true
+    rafId = 0
+    return
+  }
+  rafId = requestAnimationFrame(drawGridFrame)
+}
+
+function kickCanvas() {
+  if (reducedMotion || !gridCtx) return
+  settled = false
+  if (!rafId) rafId = requestAnimationFrame(drawGridFrame)
+}
+
+function startCanvas() {
+  if (reducedMotion) return
+  const canvas = canvasRef.value
+  if (!canvas) return
+  gridCtx = canvas.getContext('2d')
+  if (!gridCtx) return
+  readGridColor()
+  buildDots()
+  settled = false
+  lastFrame = 0
+  rafId = requestAnimationFrame(drawGridFrame)
+  window.addEventListener('resize', onResize)
+  if (finePointer) window.addEventListener('pointermove', onPointerMove)
 }
 
 function stopCanvas() {
@@ -250,182 +311,203 @@ function stopCanvas() {
 }
 
 function onResize() {
-  initParticles() // 窗口变化时重建粒子（数量随宽度档位变化）；ScrollTrigger 自己会处理 resize
+  if (!gridCtx) return
+  buildDots()
+  kickCanvas()
 }
 
-// ---------- 键盘跳过（只留 Esc；空格是原生滚动键，不能抢） ----------
+// 指针移动：更新点阵斥力中心 + 视觉图轻微视差（只动 transform，不触发布局）
+function onPointerMove(e) {
+  const canvas = canvasRef.value
+  if (canvas) {
+    const rect = canvas.getBoundingClientRect()
+    mouseX = e.clientX - rect.left
+    mouseY = e.clientY - rect.top
+    kickCanvas()
+  }
+  const overlay = overlayRef.value
+  if (!overlay || reducedMotion) return
+  const rect = overlay.getBoundingClientRect()
+  const nx = (e.clientX - rect.left) / Math.max(rect.width, 1) - 0.5
+  const ny = (e.clientY - rect.top) / Math.max(rect.height, 1) - 0.5
+  overlay.style.setProperty('--intro-mx', `${(-nx * 14).toFixed(1)}px`)
+  overlay.style.setProperty('--intro-my', `${(-ny * 10).toFixed(1)}px`)
+}
+
+// ---------- 键盘跳过（只留 Esc） ----------
 function onKeydown(e) {
   if (e.key === 'Escape') finish()
 }
 
+// ---------- 视觉图加载状态（优雅降级） ----------
+const heroImgFailed = ref(false)
+const heroImgLoaded = ref(false)
+function onHeroImgError() { heroImgFailed.value = true }
+function onHeroImgLoad() { heroImgLoaded.value = true }
+
 // ---------- 挂载 / 卸载 ----------
 onMounted(() => {
   if (!visible.value) return
-  document.body.style.overflow = 'hidden' // 锁主页面滚动，叙事在 overlay 自己的容器里滚
+  document.body.style.overflow = 'hidden' // 单屏开屏：锁住主页面滚动
   window.addEventListener('keydown', onKeydown)
-
-  if (!reducedMotion) {
-    initScrollFx()
-    const canvas = canvasRef.value
-    if (canvas) {
-      ctx = canvas.getContext('2d')
-      // 线条颜色读取当前主题的 --lx-green（浅色主主题下是 #27794f，转成 rgba 前缀用）
-      const green = getComputedStyle(canvas).getPropertyValue('--lx-green').trim()
-      if (green) {
-        const n = parseInt(green.slice(1), 16)
-        lineColor = `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, `
-      }
-      initParticles()
-      rafId = requestAnimationFrame(drawFrame)
-      window.addEventListener('resize', onResize)
-    }
-  }
+  startCanvas()
 })
 
 onBeforeUnmount(() => {
   clearTimeout(leaveTimer)
+  clearTimeout(copyTimer)
   cleanupAll()
 })
 </script>
 
 <template>
-  <!-- 不再强制 data-theme="dark"：跟随应用主题（默认浅色即浅色开屏） -->
+  <!-- 固定深色开屏（对齐 harness 首屏暗场；应用主题仍由 <html> 上的 labx_theme 决定） -->
   <div
     v-if="visible"
+    ref="overlayRef"
     class="intro-overlay"
     :class="{ 'is-leaving': leaving }"
+    data-theme="dark"
   >
-    <!-- 背景三层：蓝图网格（CSS）→ 流动波纹（CSS）→ 点阵粒子（canvas，最上层氛围） -->
-    <div class="intro-grid" aria-hidden="true"></div>
-    <div class="intro-wave" aria-hidden="true"></div>
+    <!-- z0：暗场光晕（软绿径向渐变，慢速漂移） -->
+    <div class="intro-aurora" aria-hidden="true"></div>
+
+    <!-- z2：Seedream 5.0 Pro 主视觉，screen 混合压在暗场上 -->
+    <div
+      class="hero-visual"
+      :class="{ 'is-loaded': heroImgLoaded, 'is-failed': heroImgFailed }"
+      aria-hidden="true"
+    >
+      <div class="hero-visual-drift">
+        <img
+          v-if="!heroImgFailed"
+          class="hero-visual-img"
+          src="/intro/hero-dark.png"
+          alt=""
+          @error="onHeroImgError"
+          @load="onHeroImgLoad"
+        />
+      </div>
+    </div>
+
+    <!-- z5：规则点阵 canvas（仿 harness 第二层背景） -->
     <canvas ref="canvasRef" class="intro-canvas" aria-hidden="true"></canvas>
 
+    <!-- z30：右上角跳过 -->
     <button type="button" class="skip-btn" @click="finish">跳过</button>
 
-    <!-- 右侧进度轨：5 节点，滚动高亮当前屏（纯指示，不可点） -->
-    <div class="rail" aria-hidden="true">
-      <span
-        v-for="i in PANEL_COUNT"
-        :key="i"
-        class="rail-node"
-        :class="{ on: i - 1 === activePanel }"
-      ></span>
-    </div>
-
-    <!-- overlay 自己的滚动容器：ScrollTrigger 的 scroller 指向它 -->
-    <div ref="scrollerRef" class="intro-scroller">
-      <!-- 屏 1：主视觉（标题 + 控制台终端卡片，仿 harness 首屏左文右终端） -->
-      <section class="panel panel-hero">
-        <div class="panel-inner hero-inner">
-          <div class="hero-copy">
-            <h1 class="brand">LabX 创新空间</h1>
-            <p class="brand-sub">高校创新空间的体验型智能体</p>
-            <div class="scroll-hint" aria-hidden="true">
-              <span class="scroll-hint-text">向下滚动</span>
-              <span class="scroll-hint-arrow">↓</span>
-            </div>
+    <!-- z10：左文右终端内容 -->
+    <main class="hero">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <!-- 块 1：eyebrow + 大标题，blur 最深、位移最大 -->
+          <div
+            class="enter"
+            style="--enter-y: 24px; --enter-blur: 10px; animation-duration: 0.9s"
+          >
+            <p class="hero-eyebrow lx-num">LABX // 高校创新空间</p>
+            <h1 class="hero-title">物料有去处<br />知识有回路</h1>
           </div>
-          <!-- 终端卡片：macOS 三圆点 + 绿色 $ 前缀 + mono 命令（语义色，非新色） -->
-          <div class="term-card" aria-hidden="true">
+
+          <!-- 块 2：两行说明 -->
+          <div
+            class="enter enter-desc"
+            style="--enter-y: 20px; --enter-blur: 8px; animation-delay: 0.15s"
+          >
+            <p class="hero-desc">
+              借出自动登记去向，借什么就推什么知识卡；归还写下心得，经验留给下一个人。
+            </p>
+            <p class="hero-desc">
+              问答、排障、愿望到方案，全都在同一个控制台里完成。
+            </p>
+          </div>
+
+          <!-- 块 3：双按钮 -->
+          <div
+            class="enter enter-actions"
+            style="--enter-y: 16px; animation-duration: 0.7s; animation-delay: 0.3s"
+          >
+            <button type="button" class="btn btn-primary" @click="finish">进入 LabX</button>
+            <button type="button" class="btn btn-secondary" @click="showPowers">能力清单</button>
+          </div>
+        </div>
+
+        <!-- 块 4：终端卡片（右列） -->
+        <div
+          class="enter enter-term"
+          style="--enter-y: 20px; animation-duration: 0.9s; animation-delay: 0.4s"
+        >
+          <div class="term-card">
+            <!-- tab 切换：真实交互，切终端内容 -->
+            <div class="term-tabs" role="tablist" aria-label="开屏终端内容">
+              <button
+                v-for="t in TERM_TABS"
+                :key="t.id"
+                type="button"
+                class="term-tab"
+                :class="{ on: activeTermId === t.id }"
+                role="tab"
+                :aria-selected="activeTermId === t.id"
+                @click="activeTermId = t.id"
+              >
+                {{ t.label }}
+              </button>
+            </div>
+
             <div class="term-bar">
-              <span class="term-dot term-dot-close"></span>
-              <span class="term-dot term-dot-min"></span>
-              <span class="term-dot term-dot-max"></span>
-              <span class="term-title">labx@console</span>
+              <span class="term-dot term-dot-close" aria-hidden="true"></span>
+              <span class="term-dot term-dot-min" aria-hidden="true"></span>
+              <span class="term-dot term-dot-max" aria-hidden="true"></span>
+              <span class="term-title lx-num">{{ activeTerm.title }}</span>
+              <button type="button" class="term-copy" @click="copyTerminal">
+                {{ copied ? '已复制' : '复制' }}
+              </button>
             </div>
+
             <div class="term-body">
-              <p class="term-line"><span class="term-prompt">$</span> npm run dev</p>
-              <p class="term-line"><span class="term-prompt">$</span> uvicorn main:app</p>
-              <p class="term-line"><span class="term-prompt">$</span> 借块板子 → 推知识卡</p>
-              <p class="term-line term-ok">✓ 15 件物料 · 33 张卡片在线</p>
+              <Transition name="term-fade" mode="out-in">
+                <pre :key="activeTerm.id" class="term-pre"><template v-for="(line, i) in activeTerm.lines" :key="i"><span :class="{ 'term-ok': line.ok }"><span v-if="line.prompt" class="term-prompt">$</span>{{ line.text }}</span><br v-if="i < activeTerm.lines.length - 1" /></template></pre>
+              </Transition>
             </div>
           </div>
-          <img
-            v-if="!failedImgs.has('/intro/hero.png')"
-            class="panel-img hero-img"
-            src="/intro/hero.png"
-            alt=""
-            @error="onImgError('/intro/hero.png')"
-            @load="onImgLoad"
-          />
         </div>
-      </section>
-
-      <!-- 屏 2-4：物料流转 / 知识随行 / 经验闭环 -->
-      <section v-for="s in scenes" :key="s.hud" class="panel panel-scene">
-        <div class="panel-inner">
-          <p class="hud">{{ s.hud }}</p>
-          <div class="hud-line" aria-hidden="true"></div>
-          <img
-            v-if="!failedImgs.has(s.img)"
-            class="panel-img scene-img"
-            :src="s.img"
-            alt=""
-            @error="onImgError(s.img)"
-            @load="onImgLoad"
-          />
-          <h2 class="scene-title">{{ s.title }}</h2>
-          <p class="scene-text">{{ s.text }}</p>
-        </div>
-      </section>
-
-      <!-- 屏 5：能力卡 + 进入按钮 -->
-      <section class="panel panel-enter">
-        <div class="panel-inner enter-inner">
-          <div class="cards">
-            <div v-for="c in cards" :key="c.title" class="cap-card">
-              <h3 class="cap-title">{{ c.title }}</h3>
-              <p class="cap-text">{{ c.text }}</p>
-            </div>
-          </div>
-          <button type="button" class="enter-btn" @click="finish">进入 LabX →</button>
-        </div>
-      </section>
-    </div>
+      </div>
+    </main>
   </div>
 </template>
 
 <style scoped>
-/* 颜色全部走浅色令牌（:root 默认即浅色主主题；跟随应用主题） */
+/* 固定深色开屏：根元素挂 data-theme="dark"，所有颜色继续走 --lx-* 深色令牌 */
 .intro-overlay {
   position: fixed;
   inset: 0;
-  z-index: var(--lx-z-header); /* 100：压过学生端顶栏，不占 Element 弹层托管区 */
-  background: var(--lx-bg-page); /* 浅色 #f7f7f4 暖白 */
+  z-index: var(--lx-z-header);
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--lx-bg-page);
   color: var(--lx-text-primary);
   font-family: var(--lx-font-sans);
   transition: opacity var(--lx-duration-slow) var(--lx-ease-standard);
+  scrollbar-width: none; /* 开屏短内容：隐藏滚动条，保留小屏可滚 */
+}
+.intro-overlay::-webkit-scrollbar {
+  display: none;
 }
 .intro-overlay.is-leaving {
   opacity: 0;
-  pointer-events: none; /* 淡出期间不再响应操作 */
+  pointer-events: none;
 }
 
-/* 背景层 1：蓝图网格（复用令牌网格线，仿 harness 的点阵/网格底） */
-.intro-grid {
-  position: absolute;
+/* ---------- z0 暗场光晕 ---------- */
+.intro-aurora {
+  position: fixed;
   inset: 0;
-  background-image:
-    linear-gradient(var(--lx-grid-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--lx-grid-line) 1px, transparent 1px),
-    linear-gradient(var(--lx-grid-line-fine) 1px, transparent 1px),
-    linear-gradient(90deg, var(--lx-grid-line-fine) 1px, transparent 1px);
-  background-size:
-    var(--lx-grid-size) var(--lx-grid-size),
-    var(--lx-grid-size) var(--lx-grid-size),
-    var(--lx-grid-size-fine) var(--lx-grid-size-fine),
-    var(--lx-grid-size-fine) var(--lx-grid-size-fine);
-}
-
-/* 背景层 2：流动波纹（软绿径向渐变，缓慢左右漂移；开屏豁免循环动画） */
-.intro-wave {
-  position: absolute;
-  inset: 0;
+  z-index: 0;
   overflow: hidden;
   pointer-events: none;
 }
-.intro-wave::before,
-.intro-wave::after {
+.intro-aurora::before,
+.intro-aurora::after {
   content: '';
   position: absolute;
   width: 120vw;
@@ -433,171 +515,324 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   filter: blur(60px);
 }
-.intro-wave::before {
+.intro-aurora::before {
   left: -30vw;
   top: -18vh;
   background: radial-gradient(closest-side, var(--lx-green-glow-soft), transparent 70%);
-  animation: wave-drift 26s var(--lx-ease-standard) infinite alternate;
+  animation: aurora-drift 26s var(--lx-ease-standard) infinite alternate;
 }
-.intro-wave::after {
+.intro-aurora::after {
   right: -34vw;
   bottom: -20vh;
   background: radial-gradient(closest-side, var(--lx-green-glow-soft), transparent 70%);
-  animation: wave-drift 34s var(--lx-ease-standard) infinite alternate-reverse;
+  animation: aurora-drift 34s var(--lx-ease-standard) infinite alternate-reverse;
 }
-@keyframes wave-drift {
-  from { transform: translateX(-4vw) scale(1); }
-  to { transform: translateX(4vw) scale(1.08); }
+@keyframes aurora-drift {
+  from { transform: translate3d(-4vw, 0, 0) scale(1); }
+  to { transform: translate3d(4vw, 0, 0) scale(1.08); }
 }
 
-/* 点阵粒子：固定背景，不随叙事滚动 */
+/* ---------- z2 Seedream 主视觉 ----------
+   screen 混合：图内黑色背景不污染暗场，只有发光主体叠亮；
+   入场复刻 harness 背景层：blur(20px) → 0，1.8s ease-out。 */
+.hero-visual {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: min(800px, 92vw);
+  aspect-ratio: 1;
+  margin-left: var(--lx-space-7); /* 与 harness 一致：视觉中心略右移，给左文让位 */
+  transform: translate(-50%, -50%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(20px);
+  animation: visual-in 1.8s var(--lx-ease-out) 0.1s forwards;
+}
+@keyframes visual-in {
+  to { opacity: 0.85; filter: blur(0); }
+}
+.hero-visual.is-failed {
+  animation: none;
+  opacity: 0;
+}
+.hero-visual-drift {
+  width: 100%;
+  height: 100%;
+  animation: visual-breathe 9s var(--lx-ease-standard) infinite alternate;
+}
+@keyframes visual-breathe {
+  from { transform: scale(1); }
+  to { transform: scale(1.045); }
+}
+.hero-visual-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity var(--lx-duration-slow) var(--lx-ease-out);
+  /* --intro-mx/--intro-my 由 pointermove 写入，做轻微视差 */
+  transform: translate3d(var(--intro-mx, 0px), var(--intro-my, 0px), 0);
+}
+.hero-visual.is-loaded .hero-visual-img {
+  opacity: 1;
+}
+
+/* ---------- z5 点阵 canvas ---------- */
 .intro-canvas {
-  position: absolute;
+  position: fixed;
   inset: 0;
+  z-index: 5;
   width: 100%;
   height: 100%;
 }
 
+/* ---------- 右上角跳过 ---------- */
 .skip-btn {
-  position: absolute;
+  position: fixed;
   top: var(--lx-space-4);
   right: var(--lx-space-4);
-  z-index: 3;
+  z-index: 30;
   padding: var(--lx-space-1) var(--lx-space-3);
   font-size: var(--lx-text-sm);
   color: var(--lx-text-secondary);
   background: transparent;
-  border: 1px solid var(--lx-border-strong);
-  border-radius: var(--lx-radius-base);
+  border: 1px solid color-mix(in srgb, var(--lx-text-primary) 16%, transparent);
+  border-radius: var(--lx-radius-pill);
   cursor: pointer;
-  transition: color var(--lx-duration-fast) var(--lx-ease-standard),
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-standard),
     border-color var(--lx-duration-fast) var(--lx-ease-standard);
 }
 .skip-btn:hover {
   color: var(--lx-text-primary);
   border-color: var(--lx-green);
 }
-
-/* 右侧进度轨：5 根细条，当前屏拉长变绿 */
-.rail {
-  position: absolute;
-  right: var(--lx-space-5);
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  gap: var(--lx-space-3);
-}
-.rail-node {
-  width: 2px;
-  height: 24px;
-  border-radius: var(--lx-radius-pill);
-  background: var(--lx-border-strong);
-  transition: background var(--lx-duration-base) var(--lx-ease-standard),
-    transform var(--lx-duration-base) var(--lx-ease-standard);
-}
-.rail-node.on {
-  background: var(--lx-green);
-  transform: scaleY(1.4); /* 只动 transform，不引发布局抖动 */
+.skip-btn:focus-visible {
+  outline: 1px solid var(--lx-green);
+  outline-offset: 2px;
 }
 
-/* overlay 自己的滚动容器：主页面被锁住，叙事在这里滚 */
-.intro-scroller {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain; /* 滚到底不外泄给 body */
-  scrollbar-width: thin;
-  scrollbar-color: var(--lx-border-strong) transparent;
-}
-
-/* 每屏约 100vh，内容垂直居中 */
-.panel {
+/* ---------- z10 内容容器 ---------- */
+.hero {
+  position: relative;
+  z-index: 10;
+  width: min(100% - 48px, var(--lx-container-lg));
+  margin: 0 auto;
   min-height: 100vh;
+  min-height: 100svh;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: var(--lx-space-7) var(--lx-space-5);
+  padding: var(--lx-space-8) 0 var(--lx-space-6);
 }
-.panel-inner {
-  display: flex;
-  flex-direction: column;
+.hero-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: var(--lx-space-4);
-  max-width: 720px;
+  gap: var(--lx-space-6);
   text-align: center;
 }
 
-/* 屏 1：左文右终端（宽屏 ≥1024 并排；窄屏竖排） */
-.hero-inner {
-  max-width: 960px;
-  gap: var(--lx-space-7);
+/* ---------- 入场动画（复刻 harness .ds-hero-enter） ---------- */
+.enter {
+  animation: hero-enter 0.8s var(--lx-ease-out) backwards;
 }
-@media (min-width: 1024px) {
-  .hero-inner {
-    flex-direction: row;
-    text-align: left;
-    align-items: center;
+@keyframes hero-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(var(--enter-y, 20px));
+    filter: blur(var(--enter-blur, 0px));
   }
-  .hero-copy {
-    flex: 1;
-  }
-  .term-card {
-    flex: 1;
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
   }
 }
 
-/* 终端卡片：白底 + 细边框 + mono 命令，仿 harness 首屏控制台 */
+/* ---------- 左列文案 ---------- */
+.hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--lx-space-5);
+}
+.hero-eyebrow {
+  margin: 0 0 var(--lx-space-3);
+  font-family: var(--lx-font-mono);
+  font-size: var(--lx-text-md);
+  letter-spacing: 0.08em;
+  color: var(--lx-green);
+}
+.hero-title {
+  margin: 0;
+  font-size: clamp(28px, 4.4vw, 46px); /* 开屏豁免：对齐 harness 46px 大标题 */
+  font-weight: var(--lx-font-semibold);
+  line-height: var(--lx-leading-tight);
+  letter-spacing: 0.2px;
+  color: var(--lx-text-primary);
+}
+.enter-desc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lx-space-2);
+  max-width: 580px;
+}
+.hero-desc {
+  margin: 0;
+  font-size: var(--lx-text-md);
+  line-height: var(--lx-leading);
+  color: var(--lx-text-secondary);
+}
+.enter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--lx-space-3);
+  margin-top: var(--lx-space-1);
+}
+
+/* ---------- 按钮（胶囊，复用全站令牌） ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--lx-space-3) var(--lx-space-5);
+  font-size: var(--lx-text-md);
+  font-weight: var(--lx-font-medium);
+  line-height: var(--lx-leading-tight);
+  border-radius: var(--lx-radius-pill);
+  cursor: pointer;
+  transition:
+    background var(--lx-duration-fast) var(--lx-ease-standard),
+    border-color var(--lx-duration-fast) var(--lx-ease-standard),
+    transform var(--lx-duration-fast) var(--lx-ease-standard);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:focus-visible {
+  outline: 1px solid var(--lx-green);
+  outline-offset: 3px;
+}
+.btn-primary {
+  color: var(--lx-bg-page);
+  background: var(--lx-green);
+  border: 1px solid transparent;
+}
+.btn-primary:hover {
+  background: var(--lx-green-light-3);
+}
+.btn-secondary {
+  color: var(--lx-text-primary);
+  background: color-mix(in srgb, var(--lx-text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lx-text-primary) 15%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.btn-secondary:hover {
+  border-color: color-mix(in srgb, var(--lx-text-primary) 34%, transparent);
+}
+
+/* ---------- 右列终端卡片 ---------- */
 .term-card {
-  width: min(420px, 88vw);
-  background: var(--lx-bg-surface);
-  border: 1px solid var(--lx-border);
+  width: min(424px, 100%);
+  margin: 0 auto;
+  background: color-mix(in srgb, var(--lx-bg-page) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lx-text-primary) 8%, transparent);
   border-radius: var(--lx-radius-lg);
-  box-shadow: var(--lx-shadow-2);
-  text-align: left;
+  box-shadow: var(--lx-shadow-3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   overflow: hidden;
+}
+.term-tabs {
+  display: flex;
+  gap: var(--lx-space-1);
+  padding: var(--lx-space-2) var(--lx-space-2) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--lx-text-primary) 6%, transparent);
+}
+.term-tab {
+  padding: var(--lx-space-1) var(--lx-space-4);
+  font-size: var(--lx-text-sm);
+  color: var(--lx-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--lx-radius-base) var(--lx-radius-base) 0 0;
+  cursor: pointer;
+  transition:
+    color var(--lx-duration-fast) var(--lx-ease-standard),
+    background var(--lx-duration-fast) var(--lx-ease-standard),
+    border-color var(--lx-duration-fast) var(--lx-ease-standard);
+}
+.term-tab:hover {
+  color: var(--lx-text-primary);
+}
+.term-tab.on {
+  color: var(--lx-text-primary);
+  background: color-mix(in srgb, var(--lx-bg-page) 20%, transparent);
+  border-color: color-mix(in srgb, var(--lx-text-primary) 8%, transparent);
+}
+.term-tab:focus-visible {
+  outline: 1px solid var(--lx-green);
+  outline-offset: -1px;
 }
 .term-bar {
   display: flex;
   align-items: center;
   gap: var(--lx-space-2);
-  padding: var(--lx-space-2) var(--lx-space-3);
-  background: var(--lx-bg-subtle);
-  border-bottom: 1px solid var(--lx-border-light);
+  padding: var(--lx-space-3) var(--lx-space-4);
 }
-/* 三圆点用 LabX 语义色（danger/warning/success），不引入新色 */
+/* 三圆点用深色语义色（danger/warning/success），不引入新色 */
 .term-dot {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
 }
 .term-dot-close { background: var(--lx-danger); }
 .term-dot-min { background: var(--lx-warning); }
-.term-dot-max { background: var(--lx-success); }
+.term-dot-max { background: var(--lx-success, var(--lx-green)); }
 .term-title {
   margin-left: var(--lx-space-2);
   font-family: var(--lx-font-mono);
   font-size: var(--lx-text-xs);
   color: var(--lx-text-secondary);
 }
+.term-copy {
+  margin-left: auto;
+  padding: 0;
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--lx-duration-fast) var(--lx-ease-standard);
+}
+.term-copy:hover {
+  color: var(--lx-text-primary);
+}
+.term-copy:focus-visible {
+  outline: 1px solid var(--lx-green);
+  outline-offset: 2px;
+}
 .term-body {
   padding: var(--lx-space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--lx-space-2);
 }
-.term-line {
+.term-pre {
   margin: 0;
+  min-height: 128px;
   font-family: var(--lx-font-mono);
-  font-size: var(--lx-text-sm);
-  line-height: var(--lx-leading);
-  color: var(--lx-text-regular);
+  font-size: var(--lx-text-base);
+  line-height: 1.7;
+  color: var(--lx-text-primary);
+  white-space: pre-wrap;
   word-break: break-all;
 }
 .term-prompt {
+  margin-right: var(--lx-space-2);
   color: var(--lx-green);
   font-weight: var(--lx-font-semibold);
 }
@@ -605,175 +840,81 @@ onBeforeUnmount(() => {
   color: var(--lx-green);
 }
 
-/* 图片：细边框 + 轻微绿色辉光（辉光色用 color-mix 从绿令牌兑出，不写死色值） */
-.panel-img {
-  border: 1px solid var(--lx-border);
-  border-radius: var(--lx-radius-md);
-  box-shadow: var(--lx-shadow-3),
-    0 0 48px color-mix(in srgb, var(--lx-green) 12%, transparent);
-  will-change: transform; /* scrub 期间持续动 transform，提前提示合成器 */
+/* 终端 tab 内容切换：只动 opacity */
+.term-fade-enter-active,
+.term-fade-leave-active {
+  transition: opacity var(--lx-duration-base) var(--lx-ease-standard);
 }
-.hero-img {
-  width: min(300px, 64vw);
-}
-.scene-img {
-  width: min(460px, 88vw);
+.term-fade-enter-from,
+.term-fade-leave-to {
+  opacity: 0;
 }
 
-/* 屏 1 文字 */
-.brand {
-  margin: 0;
-  font-size: var(--lx-text-4xl);
-  font-weight: var(--lx-font-bold);
-  line-height: var(--lx-leading-tight);
-  letter-spacing: 2px;
-}
-.brand-sub {
-  margin: 0;
-  font-size: var(--lx-text-md);
-  color: var(--lx-text-secondary);
-}
-
-/* 底部滚动提示：箭头呼吸起伏（reduced-motion 时全局 CSS 已把动画压成瞬时） */
-.scroll-hint {
-  margin-top: var(--lx-space-5);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--lx-space-1);
-  color: var(--lx-text-placeholder);
-}
-.scroll-hint-text {
-  font-size: var(--lx-text-xs);
-  letter-spacing: 2px;
-}
-.scroll-hint-arrow {
-  font-size: var(--lx-text-md);
-  animation: hint-breathe 1.6s var(--lx-ease-standard) infinite;
-}
-@keyframes hint-breathe {
-  0%, 100% { transform: translateY(0); opacity: 0.55; }
-  50% { transform: translateY(6px); opacity: 1; }
-}
-
-/* HUD：等宽小编号 + 细线分隔 */
-.hud {
-  margin: 0;
-  font-family: var(--lx-font-mono);
-  font-size: var(--lx-text-sm);
-  letter-spacing: 2px;
-  color: var(--lx-green);
-}
-.hud-line {
-  width: 48px;
-  height: 1px;
-  background: var(--lx-border-strong);
-}
-
-/* 屏 2-4 文字 */
-.scene-title {
-  margin: 0;
-  font-size: var(--lx-text-3xl);
-  font-weight: var(--lx-font-bold);
-  line-height: var(--lx-leading-tight);
-}
-.scene-text {
-  margin: 0;
-  font-size: var(--lx-text-base);
-  color: var(--lx-text-secondary);
-}
-
-/* 屏 5：三张能力卡 */
-.enter-inner {
-  max-width: 780px;
-  gap: var(--lx-space-6);
-}
-.cards {
-  display: flex;
-  gap: var(--lx-space-4);
-  width: 100%;
-}
-.cap-card {
-  flex: 1;
-  min-width: 0;
-  padding: var(--lx-space-5);
-  text-align: left;
-  background: var(--lx-bg-surface);
-  border: 1px solid var(--lx-border);
-  border-radius: var(--lx-radius-md);
-}
-.cap-title {
-  margin: 0 0 var(--lx-space-2);
-  font-size: var(--lx-text-md);
-  font-weight: var(--lx-font-semibold);
-  color: var(--lx-green);
-}
-.cap-text {
-  margin: 0;
-  font-size: var(--lx-text-sm);
-  line-height: var(--lx-leading);
-  color: var(--lx-text-regular);
-}
-
-.enter-btn {
-  padding: var(--lx-space-3) var(--lx-space-7);
-  font-size: var(--lx-text-lg);
-  font-weight: var(--lx-font-medium);
-  color: var(--lx-bg-page); /* 绿按钮上用暖白底做字色，对比度足够 */
-  background: var(--lx-green);
-  border: none;
-  border-radius: var(--lx-radius-base);
-  cursor: pointer;
-  transition: background var(--lx-duration-fast) var(--lx-ease-standard);
-}
-.enter-btn:hover {
-  background: var(--lx-green-light-3);
-}
-.enter-btn:active {
-  transform: translateY(1px);
-}
-
-/* reduced-motion：关掉波纹（滚动叙事与粒子已由 JS 跳过） */
-@media (prefers-reduced-motion: reduce) {
-  .intro-wave::before,
-  .intro-wave::after {
-    animation: none;
+/* ---------- 宽屏：左文右终端（与 harness 相同的 60/40 双栏） ---------- */
+@media (min-width: 1080px) {
+  .hero-grid {
+    grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+    gap: var(--lx-space-8);
+    text-align: left;
+  }
+  .hero-copy {
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .hero-desc {
+    text-align: left;
+  }
+  .enter-actions {
+    justify-content: flex-start;
   }
 }
 
-/* 移动端：375px 下字号降档、能力卡竖排、进度轨简化 */
+/* ---------- 移动端 ---------- */
 @media (max-width: 767px) {
-  .panel {
-    padding: var(--lx-space-6) var(--lx-space-4);
+  .hero {
+    width: min(100% - 32px, var(--lx-container-lg));
+    padding-top: var(--lx-space-8);
   }
-  .brand {
-    font-size: var(--lx-text-3xl);
+  .hero-visual {
+    width: min(560px, 130vw);
+    margin-left: 0;
   }
-  .brand-sub {
+  .hero-title {
+    font-size: clamp(28px, 8.5vw, 36px);
+  }
+  .hero-desc {
     font-size: var(--lx-text-base);
   }
-  .scene-title {
-    font-size: var(--lx-text-2xl);
-  }
-  .scene-text {
-    font-size: var(--lx-text-sm);
-  }
-  .cards {
+  .enter-actions {
+    width: 100%;
     flex-direction: column;
   }
-  .rail {
-    right: var(--lx-space-2);
-    gap: var(--lx-space-2);
-  }
-  .rail-node {
-    height: 16px;
+  .btn {
+    width: 100%;
   }
   .skip-btn {
     top: var(--lx-space-3);
     right: var(--lx-space-3);
   }
-  .hero-inner {
-    gap: var(--lx-space-5);
+}
+
+/* 减少动态效果：不起循环动画，视觉直接可见 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-visual {
+    animation: none;
+    opacity: 0.7;
+    filter: none;
+  }
+  .hero-visual-drift,
+  .intro-aurora::before,
+  .intro-aurora::after {
+    animation: none;
+  }
+  .enter {
+    animation: none;
+  }
+  .hero-visual-img {
+    opacity: 1;
   }
 }
 </style>

@@ -182,7 +182,7 @@
 13. **禁每行都加 border 的长列表**：分隔线成组用、稀疏用，不做"十行十道线"的表格。
 14. **禁无限循环动画与滚动监听驱动动画**；动画只在状态变化时发生。
 
-> **豁免条款（队长 2026-08-12 明确拍板；2026-08-14 开屏浅色化重做扩展）**：开屏叙事页 `IntroOverlay.vue` 是仪式感场景，允许使用滚动驱动动画（GSAP scrub）、HUD 分区编号（01 / 物料流转 等）、"向下滚动"提示与**叙事终端卡片**（仿 harness 首屏控制台：macOS 三圆点 + 绿色 `$` 前缀 + mono 命令；圆点用 LabX 语义色 danger/warning/success，不引入新色），不受红线 9、11、14 约束；点阵粒子 canvas 与流动波纹（软绿径向渐变、慢速漂移）属其氛围背景。以上元素仅限该组件，普通页面仍按红线执行。
+> **豁免条款（队长 2026-08-12 明确拍板；2026-08-14 浅色化扩展；2026-08-17 仿 harness 首屏重做扩展）**：开屏页 `IntroOverlay.vue` 是仪式感场景。当前为单屏自动播放动画，允许固定深色（组件局部 `data-theme="dark"`）、hero 大标题 clamp(28px, 4.4vw, 46px)、循环氛围动画（光晕漂移、视觉呼吸）、规则点阵 canvas（含鼠标斥力）与**叙事终端卡片**（macOS 三圆点 + 绿色 `$` 前缀 + mono 命令；圆点用 LabX 语义色 danger/warning/success，不引入新色），不受红线 9、11、14 约束。以上元素仅限该组件，普通页面仍按红线执行。
 
 ## 9. 交付前 Pre-flight 检查表
 
@@ -315,3 +315,38 @@
 
 桌面 1440×900 逐屏截图 + 移动 375×667 首屏截图（Playwright + vision 评审），
 截图存 `deta/shots/intro-light-*`（未入库）。
+
+## 15. 第八轮：开屏 1:1 仿 harness 首屏动画（2026-08-17）
+
+### 15.1 背景
+
+队长要求再次对照 [deepseek.com/harness](https://www.deepseek.com/harness/) 的实际首屏动画重做开屏。
+第七轮的"浅色 + 5 屏滚动"已跑通，但原站首屏的识别度来自：**深色暗场、规则点阵 canvas、
+发光主体 screen 混合、内容分块 blur 入场、左文右终端**。本轮改为单屏自动播放动画，不再滚动叙事。
+
+### 15.2 改动内容
+
+- **单屏开屏**：`IntroOverlay.vue` 删除 GSAP ScrollTrigger 五屏结构，改为 100svh 单屏；
+  localStorage 键 `labx_intro_seen`、跳过/Esc/未登录落 `/login` 等既有规则全部保留。
+- **固定深色**：开屏根节点挂 `data-theme="dark"`（仅作用本组件子树），复刻原站暗场；
+  结束淡出后应用仍按 `labx_theme`/系统偏好显示浅色或深色，主基调不变。
+- **背景三层**：软绿光晕（`--lx-green-glow-soft` 漂移）→ Seedream 5.0 Pro 主视觉
+  `intro/hero-dark.png`（黑底荧光绿抽象 X + 粒子轨道，2048×1152，screen 混合 + 9s 呼吸 +
+  鼠标视差）→ 90px 规则点阵 canvas（30fps、鼠标 140px 斥力、速度 < 0.01 自动停帧；
+  触屏只画一帧静态点阵）。
+- **入场动画**：复刻原站 `ds-hero-enter`——四块内容按 0 / 0.15 / 0.3 / 0.4s 依次
+  `opacity + translateY(var(--enter-y)) + blur(var(--enter-blur))` 入场；视觉图 1.8s
+  blur(20px) → 0 淡入。
+- **终端卡片**：macOS 三圆点（深色语义色）+ tab 切换（快速开始/能力清单）+ mono 绿色
+  `$` 前缀 + 复制按钮（clipboard 失败降级 textarea）。
+- **豁免扩展**：开屏固定深色、hero 标题 clamp(28px, 4.4vw, 46px)、循环呼吸/光晕漂移、
+  叙事假终端，均记入第 8 节开屏豁免，仅限本组件。
+- **素材**：`backend/scripts/seedream_gen.py` 生成 `deta/images/intro/hero-dark.png`
+  并同步到 `frontend/public/intro/hero-dark.png`；旧 scene1-3 图暂保留，不再引用。
+
+### 15.3 验证
+
+`npm run build` 通过；Playwright 实测 1440×900 与 375×667：
+首屏元素入场、终端 tab 切换、复制反馈、跳过→`/login`、localStorage 标记、
+`prefers-reduced-motion` 降级、无横向溢出、无控制台错误。
+截图存 `deta/shots/intro-harness-*`（未入库）。
