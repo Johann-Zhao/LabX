@@ -23,7 +23,9 @@ from datetime import datetime
 
 import yaml
 
-from db import Base, BorrowRecord, KnowledgeCard, Material, SessionLocal, User, engine, hash_password
+from db import (Base, BorrowRecord, KnowledgeCard, Material, MaterialSequence,
+                SessionLocal, User, engine, hash_password)
+from services import CATEGORY_PREFIX
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "..", "deta", "materials.csv")
@@ -167,14 +169,17 @@ def main() -> None:
 
     db = SessionLocal()
     try:
+        # 有外键依赖，必须按 users → materials → knowledge_cards 顺序 flush
         for u in SAMPLE_USERS:
             db.add(User(
                 id=u["id"], name=u["name"], role=u["role"],
                 password_hash=hash_password(u["id"], u["password"]),
                 created_at=datetime.now(),
             ))
+        db.flush()
         for m in load_materials():
             db.add(Material(**m, created_at=datetime.now(), updated_at=datetime.now()))
+        db.flush()
         for c in load_cards():
             db.add(KnowledgeCard(**c))
         # 预置社区经验：以 tip 卡片入库（ids 用 KC-TIP-P001 起，避免与动态 KC-TIP-10xx 冲突）
@@ -190,6 +195,14 @@ def main() -> None:
                 helpful_count=0,
                 created_at=datetime.now(),
             ))
+        # 初始化物料编号序列表：每个前缀的 next_seq = 已用最大序号 + 1
+        for prefix in CATEGORY_PREFIX.values():
+            max_seq = 0
+            for m in db.query(Material).filter(Material.id.like(f"{prefix}-%")).all():
+                tail = m.id.split("-")[-1]
+                if tail.isdigit():
+                    max_seq = max(max_seq, int(tail))
+            db.add(MaterialSequence(prefix=prefix, next_seq=max_seq + 1))
         db.commit()
 
         # 同步重建向量索引（RAG 检索用）

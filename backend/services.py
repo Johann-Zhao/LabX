@@ -5,11 +5,14 @@ main.py 的 REST 接口和 mcp_servers/ 的 MCP 工具都调用这里，
 """
 import json
 import re
+import uuid
 from datetime import datetime, timedelta
 
+from sqlalchemy import text, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, KnowledgeCard, Material, User
+from db import BorrowRecord, KnowledgeCard, Material, MaterialSequence, User
 
 DEFAULT_BORROW_DAYS = 30  # 默认借期（≤30 天免审核）
 MAX_BORROW_DAYS = 180  # 借期上限（一学期）
@@ -49,9 +52,59 @@ def parse_json_loose(raw: str | None) -> dict | None:
         return None
 
 
-def next_record_id(db: Session) -> str:
-    """记录编号 R-1001 起递增（演示规模无并发，计数即可）。"""
-    return f"R-{1001 + db.query(BorrowRecord).count()}"
+def new_record_id() -> str:
+    """记录编号 R-<uuid32>：无数据库读取、无全局计数，多进程并发也不冲突。"""
+    return f"R-{uuid.uuid4().hex}"
+
+
+def _begin_immediate(db: Session) -> None:
+    """SQLite 短事务升级为写锁：进入事务立即取 RESERVED 锁，
+    让后续"条件 UPDATE → INSERT"组合在并发下串行执行，杜绝写-写竞态窗口。
+    """
+    db.execute(text("BEGIN IMMEDIATE"))
+
+
+def _atomic_decrement_stock(db: Session, material_id: str, quantity: int) -> bool:
+    """原子扣库存：UPDATE ... WHERE available_quantity >= :qty。
+    返回是否扣减成功（rowcount==1）。库存不足或物料不存在 → False。
+    """
+    res = db.execute(
+        update(Material)
+        .where(Material.id == material_id, Material.available_quantity >= quantity)
+        .values(available_quantity=Material.available_quantity - quantity,
+                updated_at=datetime.now())
+    )
+    return res.rowcount == 1
+
+
+def _atomic_increment_stock(db: Session, material_id: str, quantity: int) -> bool:
+    """原子回补库存：带上限保护（available + qty <= total）。"""
+    res = db.execute(
+        update(Material)
+        .where(Material.id == material_id,
+               Material.available_quantity + quantity <= Material.total_quantity)
+        .values(available_quantity=Material.available_quantity + quantity,
+                updated_at=datetime.now())
+    )
+    return res.rowcount == 1
+
+
+def _next_material_seq(db: Session, prefix: str) -> int:
+    """从序列表原子取物料序号：UPDATE ... SET next_seq = next_seq + 1 RETURNING。
+    序列表行由 init_db 预建；不存在则按需插入（兜底）。"""
+    res = db.execute(
+        update(MaterialSequence)
+        .where(MaterialSequence.prefix == prefix)
+        .values(next_seq=MaterialSequence.next_seq + 1)
+        .returning(MaterialSequence.next_seq)
+    )
+    row = res.first()
+    if row is not None:
+        return row[0] - 1  # 返回自增前的值
+    # 兜底：该前缀尚无序号行（理论上 init_db 已建），从 1 开始
+    db.add(MaterialSequence(prefix=prefix, next_seq=2))
+    db.flush()
+    return 1
 
 
 # ---------- 用户与权限 ----------
@@ -155,9 +208,11 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
                 days: int = DEFAULT_BORROW_DAYS, reason: str = "", quantity: int = 1) -> dict:
     """借用状态机（见方案文档 4.2 节 + 5.6 节分级权限 + API.md 第 3 节借期分级审核）。
 
-    days ≤ 30：直接借出（active，库存 -quantity）；days > 30：需 reason，创建待审核记录
-    （pending，不扣库存、不算借用中），审核通过才借出（见 review_borrow_core）。
-    quantity 为一次借用的件数（BOM 一键预约按清单数量约），一条记录记 quantity 件。
+    并发安全设计：
+    - 库存扣减用原子条件 UPDATE（WHERE available_quantity >= qty），无"读-改-写"竞态；
+    - 记录编号用 UUID，无主键冲突；
+    - 同一用户同一物料的未完成借用由部分唯一索引 uq_borrow_open_user_material 兜底；
+    - 整个"扣库存 + 插记录"在一个短事务内，失败回滚不留半状态。
     """
     m = db.get(Material, material_id)
     if m is None:
@@ -172,6 +227,7 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
     if days > REVIEW_THRESHOLD_DAYS and not reason.strip():
         return _resp(1006, f"借用超过 {REVIEW_THRESHOLD_DAYS} 天需填写申请理由")
     # 重复借用：同一用户对该物料有未完结记录（借用中/待审核）→ 提示先归还
+    # 该检查是快速路径提示；真正的并发防线是下面的部分唯一索引。
     existing = db.query(BorrowRecord).filter(
         BorrowRecord.user_id == user_id,
         BorrowRecord.material_id == material_id,
@@ -187,13 +243,11 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
         return _resp(1003, "专业级物料需教师审批，请联系实验室老师办理", {"notice": perm["notice"]})
     if perm["result"] == "need_safety_confirm" and not safety_confirmed:
         return _resp(1002, "首次借用该类物料，请完成安全确认", {"safety_notice": perm["notice"]})
-    if m.available_quantity < quantity:
-        return _resp(1001, f"库存不足：需要 {quantity} 件，仅剩 {m.available_quantity} 件")
 
     now = datetime.now()
     needs_review = days > REVIEW_THRESHOLD_DAYS
     record = BorrowRecord(
-        id=next_record_id(db),
+        id=new_record_id(),
         user_id=user_id,
         material_id=m.id,
         quantity=quantity,
@@ -203,10 +257,26 @@ def borrow_core(db: Session, user_id: str, material_id: str, safety_confirmed: b
         review_status="pending" if needs_review else "approved",
         review_reason=reason.strip() if needs_review else None,
     )
-    if not needs_review:
-        m.available_quantity -= quantity  # 待审核不扣库存，审核通过时才扣
-    db.add(record)
-    db.commit()
+    try:
+        _begin_immediate(db)
+        if not needs_review:
+            # 原子扣库存：库存不足时 rowcount=0，不会扣成负数
+            if not _atomic_decrement_stock(db, m.id, quantity):
+                db.rollback()
+                fresh = db.get(Material, material_id)
+                left = fresh.available_quantity if fresh else 0
+                return _resp(1001, f"库存不足：需要 {quantity} 件，仅剩 {left} 件")
+        db.add(record)
+        db.commit()
+    except IntegrityError:
+        # 部分唯一索引拦截：并发下同一用户同一物料出现第二条未完成记录
+        db.rollback()
+        return _resp(1005, "你已借出该物料，请先归还")
+    except OperationalError as e:
+        db.rollback()
+        if "locked" in str(e).lower():
+            return _resp(1010, "系统正在处理其他库存操作，请稍后重试")
+        raise
     if needs_review:
         return _resp(0, "已提交审核：超期借用申请已收到，审核通过后才算借出", {
             "record_id": record.id,
@@ -273,46 +343,71 @@ def batch_borrow_core(db: Session, user_id: str, items: list[dict], days: int = 
 def review_borrow_core(db: Session, record_id: str, approve: bool) -> dict:
     """超期借用审核（管理端，演示用 /docs 调用）。
 
-    通过：转 active、库存 -quantity，借期自通过时刻起算（天数=申请时的天数），补推知识卡片；
-    驳回：转 rejected，不扣库存。仅 pending 记录可审，其他状态 → 1004。
+    并发安全：
+    - 状态迁移用原子条件 UPDATE（WHERE status='pending'），两个管理员同时审 → 只有一个成功；
+    - 通过时"状态→active + 原子扣库存"在同一事务，库存不足整体回滚，状态不被改；
+    - 借期自通过时刻起算（天数=申请时的天数），补推知识卡片。
     """
     r = db.get(BorrowRecord, record_id)
     if r is None:
         return _resp(404, f"借用记录 {record_id} 不存在")
     if r.status != "pending":
         return _resp(1004, "该记录不在待审核状态，无需操作")
-    if not approve:
-        r.status = "rejected"
-        r.review_status = "rejected"
-        db.commit()
-        return _resp(0, "已驳回", {"record_id": r.id, "status": "rejected", "review_status": "rejected"})
     qty = r.quantity or 1
-    m = db.get(Material, r.material_id)
-    if m is None or m.available_quantity < qty:
-        return _resp(1001, f"库存不足：需要 {qty} 件，仅剩 {m.available_quantity if m else 0} 件，暂无法通过")
     days = max(1, (r.due_at - r.borrowed_at).days)
+    material_id = r.material_id
     now = datetime.now()
-    r.status = "active"
-    r.review_status = "approved"
-    r.borrowed_at = now  # 借期自审核通过起算
-    r.due_at = now + timedelta(days=days)
-    m.available_quantity -= qty
-    db.commit()
+    try:
+        _begin_immediate(db)
+        if not approve:
+            res = db.execute(
+                update(BorrowRecord)
+                .where(BorrowRecord.id == record_id, BorrowRecord.status == "pending")
+                .values(status="rejected", review_status="rejected")
+            )
+            if res.rowcount != 1:
+                db.rollback()
+                return _resp(1004, "该记录不在待审核状态，无需操作")
+            db.commit()
+            return _resp(0, "已驳回", {"record_id": record_id, "status": "rejected", "review_status": "rejected"})
+        # 通过：先原子认领 pending → active，再原子扣库存；库存不足整体回滚
+        res = db.execute(
+            update(BorrowRecord)
+            .where(BorrowRecord.id == record_id, BorrowRecord.status == "pending")
+            .values(status="active", review_status="approved",
+                    borrowed_at=now, due_at=now + timedelta(days=days))
+        )
+        if res.rowcount != 1:
+            db.rollback()
+            return _resp(1004, "该记录不在待审核状态，无需操作")
+        if not _atomic_decrement_stock(db, material_id, qty):
+            db.rollback()
+            m = db.get(Material, material_id)
+            left = m.available_quantity if m else 0
+            return _resp(1001, f"库存不足：需要 {qty} 件，仅剩 {left} 件，暂无法通过")
+        db.commit()
+    except OperationalError as e:
+        db.rollback()
+        if "locked" in str(e).lower():
+            return _resp(1010, "系统正在处理其他库存操作，请稍后重试")
+        raise
     return _resp(0, "已通过，物料借出", {
-        "record_id": r.id,
+        "record_id": record_id,
         "status": "active",
         "review_status": "approved",
-        "borrowed_at": r.borrowed_at.isoformat(),
-        "due_at": r.due_at.isoformat(),
-        "knowledge_card": push_card_dict(db, m.id),
+        "borrowed_at": now.isoformat(),
+        "due_at": (now + timedelta(days=days)).isoformat(),
+        "knowledge_card": push_card_dict(db, material_id),
     })
 
 
 def return_core(db: Session, record_id: str) -> dict:
     """归还：仅 active（含动态判定的 overdue）→ returned，库存回补，附 AI 预填心得草稿。
 
-    状态白名单：只有真正借出过（扣过库存）的记录才能归还；
-    returned/pending/rejected 均未占用或已释放库存，归还会导致库存凭空增加 → 1004。
+    并发安全：
+    - 状态认领用原子条件 UPDATE（WHERE status='active'），并发重复归还只有一个成功；
+    - 库存回补带上限保护，与状态迁移同事务，失败回滚不重复加库存；
+    - AI 心得草稿在事务外生成，失败不影响已成功的归还。
     """
     r = db.get(BorrowRecord, record_id)
     if r is None:
@@ -324,17 +419,34 @@ def return_core(db: Session, record_id: str) -> dict:
     if r.status != "active":
         return _resp(1004, "该记录不在借用中状态，无需归还")
 
-    r.status = "returned"
-    r.returned_at = datetime.now()
-    m = db.get(Material, r.material_id)
-    if m is not None:
-        m.available_quantity += (r.quantity or 1)  # 按记录上的件数回补库存
-    db.commit()
+    qty = r.quantity or 1
+    material_id = r.material_id
+    now = datetime.now()
+    try:
+        _begin_immediate(db)
+        # 原子认领 active → returned：并发下只有一个请求能改成功
+        res = db.execute(
+            update(BorrowRecord)
+            .where(BorrowRecord.id == record_id, BorrowRecord.status == "active")
+            .values(status="returned", returned_at=now)
+        )
+        if res.rowcount != 1:
+            db.rollback()
+            return _resp(1004, "该记录不在借用中状态，无需归还")
+        if not _atomic_increment_stock(db, material_id, qty):
+            db.rollback()
+            return _resp(1011, "库存回补失败：数量异常，请联系管理员")
+        db.commit()
+    except OperationalError as e:
+        db.rollback()
+        if "locked" in str(e).lower():
+            return _resp(1010, "系统正在处理其他库存操作，请稍后重试")
+        raise
     return _resp(0, "归还成功", {
-        "record_id": r.id,
+        "record_id": record_id,
         "status": "returned",
-        "returned_at": r.returned_at.isoformat(),
-        "experience_draft": experience_draft_core(db, r),
+        "returned_at": now.isoformat(),
+        "experience_draft": experience_draft_core(db, db.get(BorrowRecord, record_id)),
     })
 
 
@@ -348,7 +460,9 @@ def create_material_core(db: Session, name: str, category: str, model: str = "",
                          total_quantity: int = 1, access_level: str = "basic", description: str = "") -> dict:
     """录入新物料（管理端）：分类前缀映射 + 名称去重 + 自动生成编号。
 
-    分类不在映射内 / 名称与现有物料重复 → 1007（msg 区分两类原因）。
+    并发安全：编号取自序列表 material_sequences（原子 UPDATE ... RETURNING），
+    替代"扫描同前缀最大序号+1"；名称唯一索引兜底防并发录入同名物料。
+    分类不在映射内 / 名称与现有物料重复 → 1007。
     """
     name = (name or "").strip()
     category = (category or "").strip()
@@ -366,22 +480,26 @@ def create_material_core(db: Session, name: str, category: str, model: str = "",
         total_quantity = 1
     if access_level not in ("basic", "advanced", "professional"):
         access_level = "basic"
-    # 取该前缀现有最大序号（容忍编号后两位不是纯数字的脏数据，跳过不计）
-    max_seq = 0
-    for m in db.query(Material).filter(Material.id.like(f"{prefix}-%")).all():
-        tail = m.id.split("-")[-1]
-        if tail.isdigit():
-            max_seq = max(max_seq, int(tail))
-    new_id = f"{prefix}-{max_seq + 1:03d}"
     now = datetime.now()
-    m = Material(
-        id=new_id, name=name, category=category, model=(model or "").strip(),
-        location=(location or "201室").strip(), total_quantity=total_quantity,
-        available_quantity=total_quantity, access_level=access_level,
-        description=(description or "").strip(), created_at=now, updated_at=now,
-    )
-    db.add(m)
-    db.commit()
+    try:
+        _begin_immediate(db)
+        new_id = f"{prefix}-{_next_material_seq(db, prefix):03d}"
+        m = Material(
+            id=new_id, name=name, category=category, model=(model or "").strip(),
+            location=(location or "201室").strip(), total_quantity=total_quantity,
+            available_quantity=total_quantity, access_level=access_level,
+            description=(description or "").strip(), created_at=now, updated_at=now,
+        )
+        db.add(m)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return _resp(1007, f"名称已存在：{name}")
+    except OperationalError as e:
+        db.rollback()
+        if "locked" in str(e).lower():
+            return _resp(1010, "系统正在处理其他库存操作，请稍后重试")
+        raise
     return _resp(0, "ok", {
         "material_id": m.id, "name": m.name, "model": m.model, "category": m.category,
         "access_level": m.access_level, "total_quantity": m.total_quantity,

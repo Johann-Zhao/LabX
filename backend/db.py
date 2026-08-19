@@ -10,15 +10,33 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import (Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index,
+                        Integer, String, Text, create_engine, event, text)
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "labx.db")
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+# timeout=5：库被写锁占用时等待 5 秒再报 database is locked（busy_timeout 兜底）
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    connect_args={"check_same_thread": False, "timeout": 5},
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _record):
+    """每个新连接启用 WAL（读写并发）、外键和 busy_timeout。
+
+    SQLite 仍是单写者模型，并发正确性靠原子条件更新 + 短事务保证（见 services）。
+    """
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode = WAL")
+    cur.execute("PRAGMA foreign_keys = ON")
+    cur.execute("PRAGMA busy_timeout = 5000")
+    cur.close()
 
 
 @contextmanager
@@ -33,9 +51,14 @@ def session_scope():
 
 class Material(Base):
     __tablename__ = "materials"
+    __table_args__ = (
+        CheckConstraint("total_quantity >= 0", name="ck_material_total_nonneg"),
+        CheckConstraint("available_quantity >= 0", name="ck_material_avail_nonneg"),
+        CheckConstraint("available_quantity <= total_quantity", name="ck_material_avail_lte_total"),
+    )
 
     id = Column(String(32), primary_key=True)  # 物料编号，如 A-017
-    name = Column(String(200), nullable=False)
+    name = Column(String(200), nullable=False, unique=True)  # 名称唯一，防并发录入同名物料
     category = Column(String(50), nullable=False)  # 开发板/传感器/工具/耗材/设备
     model = Column(String(100))  # 型号规格
     location = Column(String(200), nullable=False)  # 存放位置（实验室+柜号）
@@ -67,10 +90,18 @@ def hash_password(user_id: str, password: str) -> str:
 
 class BorrowRecord(Base):
     __tablename__ = "borrow_records"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_borrow_qty_positive"),
+        CheckConstraint("status IN ('pending','active','returned','rejected')", name="ck_borrow_status"),
+        CheckConstraint("review_status IN ('approved','pending','rejected')", name="ck_borrow_review_status"),
+        # 部分唯一索引：同一用户对同一物料最多一条未完成记录（应用层检查的并发兜底）
+        Index("uq_borrow_open_user_material", "user_id", "material_id",
+              unique=True, sqlite_where=text("status IN ('active','pending')")),
+    )
 
-    id = Column(String(32), primary_key=True)  # 记录编号，R-1001 起递增
-    user_id = Column(String(32), nullable=False)
-    material_id = Column(String(32), nullable=False)
+    id = Column(String(48), primary_key=True)  # 记录编号 R-<uuid32>，见 services.new_record_id
+    user_id = Column(String(32), ForeignKey("users.id"), nullable=False)
+    material_id = Column(String(32), ForeignKey("materials.id"), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     status = Column(String(20), nullable=False, default="active")  # pending/active/returned/rejected
     borrowed_at = Column(DateTime, nullable=False, default=datetime.now)
@@ -82,11 +113,22 @@ class BorrowRecord(Base):
     review_reason = Column(Text)  # 学生申请超期借用时填写的理由
 
 
+class MaterialSequence(Base):
+    """物料编号序列表：按分类前缀原子取号，替代"扫描同前缀最大序号+1"（并发安全）。
+
+    next_seq 是"下一个可用序号"，取号时原子 UPDATE ... RETURNING。
+    """
+    __tablename__ = "material_sequences"
+
+    prefix = Column(String(8), primary_key=True)  # A/S/M/T/H/E，见 services.CATEGORY_PREFIX
+    next_seq = Column(Integer, nullable=False, default=1)
+
+
 class KnowledgeCard(Base):
     __tablename__ = "knowledge_cards"
 
     id = Column(String(64), primary_key=True)  # KC-<文件名>，如 KC-S-003-manual
-    material_id = Column(String(32), nullable=False)  # 关联物料 ID
+    material_id = Column(String(32), ForeignKey("materials.id"), nullable=False)  # 关联物料 ID
     card_type = Column(String(20), nullable=False)  # manual/quickstart/common_errors/tip
     title = Column(String(300), nullable=False)
     points = Column(Text, nullable=False, default="[]")  # 三条要点，JSON 数组字符串
