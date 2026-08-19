@@ -309,7 +309,11 @@ def review_borrow_core(db: Session, record_id: str, approve: bool) -> dict:
 
 
 def return_core(db: Session, record_id: str) -> dict:
-    """归还：active/overdue → returned，库存 +1，附 AI 预填心得草稿。"""
+    """归还：仅 active（含动态判定的 overdue）→ returned，库存回补，附 AI 预填心得草稿。
+
+    状态白名单：只有真正借出过（扣过库存）的记录才能归还；
+    returned/pending/rejected 均未占用或已释放库存，归还会导致库存凭空增加 → 1004。
+    """
     r = db.get(BorrowRecord, record_id)
     if r is None:
         return _resp(404, f"借用记录 {record_id} 不存在")
@@ -317,6 +321,8 @@ def return_core(db: Session, record_id: str) -> dict:
         return _resp(1004, "该记录已归还，请勿重复操作")
     if r.status == "pending":
         return _resp(1004, "该记录仍在待审批状态，无需归还")
+    if r.status != "active":
+        return _resp(1004, "该记录不在借用中状态，无需归还")
 
     r.status = "returned"
     r.returned_at = datetime.now()
