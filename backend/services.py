@@ -4,6 +4,7 @@ main.py 的 REST 接口和 mcp_servers/ 的 MCP 工具都调用这里，
 保证状态机只有一份实现（AGENTS.md 第 6 节）。
 """
 import json
+import os
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, KnowledgeCard, Material, MaterialSequence, User
+from db import BorrowRecord, KnowledgeCard, Material, MaterialSequence, Upload, User
 
 DEFAULT_BORROW_DAYS = 30  # 默认借期（≤30 天免审核）
 MAX_BORROW_DAYS = 180  # 借期上限（一学期）
@@ -773,3 +774,144 @@ def experience_core(db: Session, material_id: str, user_id: str, content: str,
     db.commit()
     rag.add_card(card)  # 增量进向量库，下一个借用者立刻能检索到
     return _resp(0, "经验已提交，感谢分享", {"tip_id": card.id, "structured": structured})
+
+
+# ---------- 用户上传资料与审核（多模态知识扩展） ----------
+
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+# 鼓励文案：上传即肯定，审核后帮助更多人
+_UPLOAD_THANKS = "感谢分享！你的资料已收到，管理员审核通过后就会并入知识库帮助更多同学。"
+_UPLOAD_REVIEW_PASS = "感谢分享！你的资料已通过审核，正式加入知识库，会帮助到更多同学。"
+
+
+def new_upload_id() -> str:
+    """上传编号 U-<uuid32>。"""
+    return f"U-{uuid.uuid4().hex}"
+
+
+def _upload_to_dict(u: Upload, user_name: str | None = None, material_name: str | None = None) -> dict:
+    return {
+        "upload_id": u.id,
+        "user_id": u.user_id,
+        "user_name": user_name or u.user_id,
+        "material_id": u.material_id,
+        "material_name": material_name,
+        "filename": u.filename,
+        "file_type": u.file_type,
+        "file_size": u.file_size,
+        "status": u.status,
+        "review_note": u.review_note,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+def upload_file_core(db: Session, user_id: str, material_id: str | None,
+                     filename: str, file_content: bytes, content_type: str | None) -> dict:
+    """保存上传文件并解析内容，返回上传记录与鼓励文案。
+
+    文件写入 backend/uploads/，解析后的文本存入 parsed_text（图片不存文本）。
+    任何格式不支持或超大文件都会提前返回错误。
+    """
+    from file_parser import parse_file
+
+    if db.get(User, user_id) is None:
+        return _resp(404, f"用户 {user_id} 不存在")
+    if material_id and db.get(Material, material_id) is None:
+        return _resp(404, f"物料 {material_id} 不存在")
+
+    parsed = parse_file(file_content, filename, content_type)
+    if not parsed["ok"]:
+        return _resp(400, parsed["msg"])
+
+    upload_id = new_upload_id()
+    safe_name = re.sub(r'[\\/:*?"<>|]', "_", filename)  # 防路径注入
+    file_path = os.path.join(UPLOAD_DIR, f"{upload_id}_{safe_name}")
+    with open(file_path, "wb") as f:
+        f.write(file_content)
+
+    u = Upload(
+        id=upload_id,
+        user_id=user_id,
+        material_id=material_id,
+        filename=filename,
+        file_path=os.path.relpath(file_path, os.path.dirname(UPLOAD_DIR)),
+        file_type=parsed["type"],
+        file_size=len(file_content),
+        status="pending",
+        parsed_text=parsed.get("text") if parsed["type"] == "text" else None,
+        created_at=datetime.now(),
+    )
+    db.add(u)
+    db.commit()
+    return _resp(0, _UPLOAD_THANKS, _upload_to_dict(u))
+
+
+def list_uploads_core(db: Session, status: str | None = None, user_id: str | None = None) -> dict:
+    """查询上传列表：管理端可查全部，学生只能查自己的。"""
+    q = db.query(Upload)
+    if status:
+        q = q.filter(Upload.status == status)
+    if user_id:
+        q = q.filter(Upload.user_id == user_id)
+    uploads = q.order_by(Upload.created_at.desc()).all()
+    user_names = {u.id: u.name for u in db.query(User).all()}
+    material_names = {m.id: m.name for m in db.query(Material).all()}
+    return _resp(0, "ok", [
+        _upload_to_dict(u, user_names.get(u.user_id), material_names.get(u.material_id))
+        for u in uploads
+    ])
+
+
+def get_upload_core(db: Session, upload_id: str) -> dict:
+    """获取单个上传记录详情（含解析后的文本，管理端预览用）。"""
+    u = db.get(Upload, upload_id)
+    if u is None:
+        return _resp(404, f"上传记录 {upload_id} 不存在")
+    user_names = {u.id: u.name for u in db.query(User).all()}
+    material_names = {m.id: m.name for m in db.query(Material).all()}
+    data = _upload_to_dict(u, user_names.get(u.user_id), material_names.get(u.material_id))
+    data["parsed_text"] = u.parsed_text
+    return _resp(0, "ok", data)
+
+
+def review_upload_core(db: Session, upload_id: str, approve: bool, note: str = "") -> dict:
+    """管理员审核上传资料：通过则转为知识卡片（tip），驳回则标记 rejected。
+
+    通过时：若有关联物料，生成该物料的 tip 卡片；无关联物料则生成通用 tip（material_id 为 "GENERAL"）。
+    """
+    import rag
+
+    u = db.get(Upload, upload_id)
+    if u is None:
+        return _resp(404, f"上传记录 {upload_id} 不存在")
+    if u.status != "pending":
+        return _resp(400, f"该资料已审核过（当前状态：{u.status}）")
+
+    u.review_note = note or None
+    if not approve:
+        u.status = "rejected"
+        db.commit()
+        return _resp(0, "已驳回", _upload_to_dict(u))
+
+    # 审核通过：生成知识卡片
+    u.status = "approved"
+    material_id = u.material_id or "GENERAL"
+    material = db.get(Material, material_id) if u.material_id else None
+    material_name = material.name if material else "通用资料"
+
+    n = db.query(KnowledgeCard).count()
+    card = KnowledgeCard(
+        id=f"KC-UPLOAD-{1000 + n}",
+        material_id=material_id,
+        card_type="tip",
+        title=f"{u.filename}（{material_name}）",
+        points=json.dumps([f"来源：{u.user_id} 上传分享", f"文件类型：{u.file_type}"], ensure_ascii=False),
+        content=u.parsed_text or f"[图片资料] {u.filename}，请查看原文件。",
+        contributor_id=u.user_id,
+        helpful_count=0,
+        created_at=datetime.now(),
+    )
+    db.add(card)
+    db.commit()
+    rag.add_card(card)
+    return _resp(0, _UPLOAD_REVIEW_PASS, _upload_to_dict(u))

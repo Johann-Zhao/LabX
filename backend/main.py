@@ -8,14 +8,14 @@ import json
 import queue
 import threading
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, User, display_status, hash_password
-from services import ask_core, batch_borrow_core, borrow_core, create_material_core, experience_core, material_to_dict, recommend_bom_core, return_core, review_borrow_core
+from db import BorrowRecord, KnowledgeCard, Material, SessionLocal, Upload, User, display_status, hash_password
+from services import ask_core, batch_borrow_core, borrow_core, create_material_core, experience_core, material_to_dict, recommend_bom_core, return_core, review_borrow_core, get_upload_core, list_uploads_core, review_upload_core, upload_file_core
 
 app = FastAPI(title="LabX API")
 app.add_middleware(
@@ -86,6 +86,7 @@ class AgentChatReq(BaseModel):
     user_id: str
     message: str
     conv_id: str = "default"  # 前端为每个对话页生成的会话 ID，用于澄清状态挂起/恢复
+    file_context: dict | None = None  # 多模态文件上下文：{type, text?, base64?, mime?, filename}
 
 
 class LoginReq(BaseModel):
@@ -275,7 +276,7 @@ def agent_chat_endpoint(req: AgentChatReq, db: Session = Depends(get_db)):
     交互规则见 docs/agent-workflow.md；steps 为中间调用过程（演示展示用）。
     """
     from orchestrator import agent_chat
-    return agent_chat(db, req.user_id, req.message, req.conv_id)
+    return agent_chat(db, req.user_id, req.message, req.conv_id, file_context=req.file_context)
 
 
 @app.post("/api/agent/chat/stream")
@@ -297,7 +298,8 @@ def agent_chat_stream_endpoint(req: AgentChatReq):
             def on_status(text: str) -> None:
                 events.put({"type": "status", "text": text})
 
-            result = agent_chat(db, req.user_id, req.message, req.conv_id, on_status=on_status)
+            result = agent_chat(db, req.user_id, req.message, req.conv_id, on_status=on_status,
+                                file_context=req.file_context)
             events.put({"type": "final", "data": result.get("data", result)})
         except Exception as e:  # 编排异常：流式通道也要能报错，不能静默挂死
             events.put({"type": "error", "msg": str(e)})
@@ -331,6 +333,43 @@ def recommend_bom(req: RecommendBomReq, db: Session = Depends(get_db)):
 def share_experience(req: ExperienceReq, db: Session = Depends(get_db)):
     """提交使用经验：LLM 结构化后写入 tip 卡片并同步向量库。"""
     return experience_core(db, req.material_id, req.user_id, req.content, req.record_id)
+
+
+# ---------- 用户上传资料与审核 ----------
+
+@app.post("/api/uploads")
+async def upload_file(
+    user_id: str = Form(...),
+    material_id: str | None = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """上传资料（图片/PDF/Word/TXT），需管理员审核后才并入知识库。"""
+    content = await file.read()
+    return upload_file_core(db, user_id, material_id, file.filename, content, file.content_type)
+
+
+@app.get("/api/uploads")
+def list_uploads(status: str = "", user_id: str = "", db: Session = Depends(get_db)):
+    """上传列表：管理端查全部（status 可过滤），学生只能查自己的。"""
+    return list_uploads_core(db, status or None, user_id or None)
+
+
+@app.get("/api/uploads/{upload_id}")
+def get_upload(upload_id: str, db: Session = Depends(get_db)):
+    """单个上传记录详情（含解析文本，管理端预览用）。"""
+    return get_upload_core(db, upload_id)
+
+
+class ReviewUploadReq(BaseModel):
+    approve: bool
+    note: str = ""
+
+
+@app.post("/api/uploads/{upload_id}/review")
+def review_upload(upload_id: str, req: ReviewUploadReq, db: Session = Depends(get_db)):
+    """管理员审核上传资料：通过则转为知识卡片，驳回则标记 rejected。"""
+    return review_upload_core(db, upload_id, req.approve, req.note)
 
 
 if __name__ == "__main__":

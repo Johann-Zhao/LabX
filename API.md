@@ -290,5 +290,87 @@ GET /api/cards/{card_id}
 | 1006 | 借用超过 30 天需填写申请理由（`days > 30` 且 `reason` 为空） |
 | 1007 | 物料录入参数非法（分类不在映射 / 名称已存在） |
 | 1008 | 学号或密码错误（登录失败） |
+| 1009 | 文件格式不支持或超过大小限制（10MB） |
 
-> 当前状态：全部接口为真实实现。1002 / 1003 权限拦截已生效（阶段 3）；超期借用分级审核（1006 + 第 3.1 节）已生效；智能体对话见第 10 节。
+> 当前状态：全部接口为真实实现。1002 / 1003 权限拦截已生效（阶段 3）；超期借用分级审核（1006 + 第 3.1 节）已生效；智能体对话见第 10 节；文件上传与多模态见第 11 节。
+
+---
+
+## 11. 文件上传与多模态
+
+### 11.1 上传资料
+
+```
+POST /api/uploads
+Content-Type: multipart/form-data
+参数: user_id（表单字段）, material_id（可选，表单字段）, file（文件）
+返回: { "code": 0, "msg": "感谢分享！你的资料已收到，管理员审核通过后就会并入知识库帮助更多同学。",
+       "data": { "upload_id": "U-xxx", "user_id": "2024001", "material_id": "A-017",
+                 "filename": "L298N接线图.pdf", "file_type": "text", "file_size": 10240,
+                 "status": "pending", "created_at": "..." } }
+```
+
+说明：
+- 支持格式：图片（jpg/png/gif/webp）、PDF、Word(docx)、TXT/MD。
+- 文件大小限制 10MB，超出返回 `code: 1009`。
+- 上传后 `status=pending`，需管理员审核（第 11.3 节）通过后才并入知识库。
+- `file_type`：`image` / `text`（PDF/Word/TXT 解析后为文本）。
+
+### 11.2 上传列表
+
+```
+GET /api/uploads?status=&user_id=
+返回: { "code": 0, "msg": "ok", "data": [ ... ] }
+```
+
+说明：
+- `status` 可选：`pending` / `approved` / `rejected`。
+- `user_id` 可选：传入则只查该用户的上传记录（学生视角）；不传查全部（管理端视角）。
+
+### 11.3 审核上传资料（管理端）
+
+```
+POST /api/uploads/{upload_id}/review
+入参: { "approve": true, "note": "" }
+返回: { "code": 0, "msg": "感谢分享！你的资料已通过审核，正式加入知识库，会帮助到更多同学。",
+       "data": { ...upload 记录... } }
+```
+
+说明：
+- `approve=true`：`status` 转 `approved`，内容生成 `tip` 类型知识卡片（`card_id` 以 `KC-UPLOAD-` 前缀），同步到向量库。
+- `approve=false`：`status` 转 `rejected`，`review_note` 记录驳回理由。
+
+### 11.4 智能助手多模态对话
+
+`POST /api/agent/chat` 与 `POST /api/agent/chat/stream` 请求体新增可选字段：
+
+```json
+{
+  "user_id": "2024001",
+  "message": "这个电路图怎么接？",
+  "conv_id": "xxx",
+  "file_context": {
+    "type": "image",
+    "base64": "base64编码...",
+    "mime": "image/jpeg",
+    "filename": "电路图.jpg"
+  }
+}
+```
+
+或文本文件：
+
+```json
+{
+  "file_context": {
+    "type": "text",
+    "text": "文件提取的文本内容...",
+    "filename": "L298N说明书.pdf"
+  }
+}
+```
+
+说明：
+- `file_context.type=image`：智能助手调用 vision 模型直接识别图片内容。
+- `file_context.type=text`：文件文本注入 prompt 作为上下文，与本地知识库/联网检索共同参与回答。
+- 图片大小建议前端压缩到 1024px 以内，base64 后不超过 5MB。

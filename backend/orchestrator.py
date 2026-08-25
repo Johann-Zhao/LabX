@@ -280,13 +280,14 @@ def _noop_status(text: str) -> None:
 def _ladder_answer(question: str, target, spare_text: str, names: str, steps: list,
                    custom_material: str | None = None, role: str | None = None,
                    answer_format: str | None = None, search_query: str | None = None,
-                   on_status=None) -> tuple[str, list, str]:
+                   on_status=None, file_context: dict | None = None) -> tuple[str, list, str]:
     """返回 (answer, references, provenance)。流程见 docs/agent-workflow.md：
 
     本地只在"强相关"（型号对应 + 原因对应）时使用；自带物料跳过本地直接联网。
     role / answer_format 可定制回答角色与输出结构（explore 用，默认排障专家）；
     search_query 指定检索词（默认按"物料名 + 问题"自动拼，explore 用用途导向词）。
     on_status 为可选的流式状态回调（每个真实动作前调用，诚实报告执行过程）。
+    file_context 为可选的多模态文件上下文，图片走 vision 模型，文本注入 prompt。
     """
     on_status = on_status or _noop_status
     system_role = role or "你是高校创新空间的排障/答疑专家。只根据给定的知识片段回答，语气直接、给操作指令，250 字以内。"
@@ -301,6 +302,29 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
         query_text = question
     # 备用检索词不宜太长：DuckDuckGo 对整段问题检索效果差，压到 80 字以内
     search_text = re.sub(r"\s+", " ", query_text).strip()[:80]
+
+    # 多模态：图片直接走 vision 模型（不检索本地/联网，图片本身就是上下文）
+    if file_context and file_context.get("type") == "image":
+        on_status("正在识别图片内容…")
+        image_prompt = f"学生上传了一张图片，问题是：{question}\n请分析图片内容并回答学生问题。"
+        raw = llm.chat_with_image(
+            system_role + "\n" + fmt,
+            image_prompt,
+            file_context.get("base64", ""),
+            file_context.get("mime", "image/jpeg"),
+            max_tokens=800,
+            fallback=None,
+        )
+        if raw:
+            steps.append({"step": "图片识别", "detail": f"已识别上传图片：{file_context.get('filename', '未命名')}"})
+            return raw, [], "model"
+        steps.append({"step": "图片识别失败", "detail": "退回通用经验回答"})
+
+    # 多模态：文本文件内容注入 prompt（本地检索时把文件内容也作为上下文）
+    file_text = ""
+    if file_context and file_context.get("type") == "text":
+        file_text = f"\n\n【用户上传的文件内容：{file_context.get('filename', '未命名')}】\n{file_context.get('text', '')[:1500]}"
+        question = question + file_text
 
     # 1. 本地知识库：仅当型号对应（目录内物料）。
     #    自带物料无型号对应，直接跳过；目录内物料检索未命中时也不拿其他物料卡片凑数。
@@ -398,7 +422,7 @@ def _clarify(state: dict, intent: str, message: str, slots: dict, awaiting: str,
 
 def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
                   allow_clarify: bool, slots: dict | None = None,
-                  mention: str | None = None, on_status=None) -> dict:
+                  mention: str | None = None, on_status=None, file_context: dict | None = None) -> dict:
     """排障分支：槽位（物料/现象）逐轮澄清，问清为止 → 阶梯回答。"""
     on_status = on_status or _noop_status
     stats = get_user_stats_core(db, user_id)
@@ -457,7 +481,7 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
     answer, refs, provenance = _ladder_answer(question, target, spare_text, names, steps,
                                               custom_material=custom_material,
                                               search_query=search_query,
-                                              on_status=on_status)
+                                              on_status=on_status, file_context=file_context)
     return _resp(0, "ok", {
         "intent": "troubleshoot", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
@@ -466,7 +490,7 @@ def _troubleshoot(db, user_id: str, message: str, steps: list, state: dict,
 
 def _explore(db, user_id: str, message: str, steps: list, state: dict,
              allow_clarify: bool, slots: dict | None = None,
-             mention: str | None = None, on_status=None) -> dict:
+             mention: str | None = None, on_status=None, file_context: dict | None = None) -> dict:
     """物料求用法分支：槽位只要"物料"（不要现象——物料没坏，只是不知道能做什么/怎么上手）。
 
     目录内物料：本地 → 联网阶梯（explore 格式）；自带物料：跳过本地直连联网，
@@ -539,7 +563,7 @@ def _explore(db, user_id: str, message: str, steps: list, state: dict,
         question, target, "", names, steps,
         custom_material=custom_material,
         role=_EXPLORE_ROLE, answer_format=_EXPLORE_FORMAT,
-        search_query=search_query, on_status=on_status,
+        search_query=search_query, on_status=on_status, file_context=file_context,
     )
     # 目录内物料且可借：后端拼一句"可借引导"（不靠 LLM）
     if target and target.available_quantity > 0:
@@ -568,7 +592,7 @@ _GREETING_ANSWER = (
 )
 
 
-def _chitchat(db, message: str, steps: list, on_status=None) -> dict:
+def _chitchat(db, message: str, steps: list, on_status=None, file_context: dict | None = None) -> dict:
     """开放式问答：无槽位检查。
 
     纯打招呼/自我介绍直接固定回应；其余问题走本地→联网→通用阶梯，
@@ -585,6 +609,7 @@ def _chitchat(db, message: str, steps: list, on_status=None) -> dict:
     answer, refs, provenance = _ladder_answer(
         message, None, "", "", steps,
         role=_CHITCHAT_ROLE, answer_format=_CHITCHAT_FORMAT, on_status=on_status,
+        file_context=file_context,
     )
     return _resp(0, "ok", {
         "intent": "chitchat", "steps": steps,
@@ -644,7 +669,7 @@ def _inventory(db, message: str, steps: list, state: dict | None = None) -> dict
 
 def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_clarify: bool,
               forced_intent: str | None, slots: dict | None = None,
-              mention: str | None = None, on_status=None) -> dict:
+              mention: str | None = None, on_status=None, file_context: dict | None = None) -> dict:
     on_status = on_status or _noop_status
     if forced_intent:
         intent = forced_intent  # 澄清重入：意图已知，不再识别
@@ -654,24 +679,26 @@ def _dispatch(db, user_id: str, message: str, steps: list, state: dict, allow_cl
     steps.insert(0, {"step": "意图识别", "detail": f"识别为「{INTENT_LABELS[intent]}」"})
     if intent == "troubleshoot":
         return _troubleshoot(db, user_id, message, steps, state, allow_clarify, slots,
-                             mention=mention, on_status=on_status)
+                             mention=mention, on_status=on_status, file_context=file_context)
     if intent == "explore":
         return _explore(db, user_id, message, steps, state, allow_clarify, slots,
-                        mention=mention, on_status=on_status)
+                        mention=mention, on_status=on_status, file_context=file_context)
     if intent == "recommend":
         return _recommend(db, user_id, message, steps, on_status=on_status)
     if intent == "inventory":
         return _inventory(db, message, steps, state)
-    return _chitchat(db, message, steps, on_status=on_status)
+    return _chitchat(db, message, steps, on_status=on_status, file_context=file_context)
 
 
-def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_status=None) -> dict:
+def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_status=None,
+               file_context: dict | None = None) -> dict:
     """编排入口。conv_id 标识对话（前端生成），用于澄清槽位的挂起与恢复。
 
     澄清是逐槽位多轮的：每轮只问一个缺失槽位，直到物料+现象都清楚
     （或用户点"不用问了，直接回答"）。规则见 docs/agent-workflow.md。
     on_status 为可选的流式状态回调（str → None），每个真实执行动作前调用
     （/api/agent/chat/stream 用它推过程状态，非流式调用传 None 即可）。
+    file_context 为可选的多模态文件上下文：{"type": "text"|"image", "text": str, "base64": str, "mime": str, "filename": str}。
     """
     if conv_id not in _CONV and len(_CONV) >= _MAX_CONV_STATES:
         # 内存演示规模：只保留最近活跃的会话状态，防止长期运行越积越多
@@ -679,6 +706,22 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
         _CONV.pop(oldest, None)
     state = _CONV.setdefault(conv_id, {})
     state["last_ts"] = time.time()
+
+    # 多模态文件上下文：有文件时先记录状态，并把文件内容注入消息
+    if file_context:
+        filename = file_context.get("filename", "未命名文件")
+        ftype = file_context.get("type")
+        if ftype == "image":
+            state["last_file"] = {"type": "image", "filename": filename,
+                                  "base64": file_context.get("base64"), "mime": file_context.get("mime", "image/jpeg")}
+            message = f"{message}\n[用户上传了图片：{filename}]"
+        elif ftype == "text":
+            text = file_context.get("text", "")[:2000]  # 文本太长截断，防 token 爆炸
+            state["last_file"] = {"type": "text", "filename": filename, "text": text}
+            message = f"{message}\n[用户上传了文件：{filename}]\n文件内容：\n{text}"
+        on_status = on_status or _noop_status
+        on_status(f"已接收并解析上传文件：{filename}")
+
     pending = state.pop("pending", None)
     if pending:
         slots = pending.get("slots") or {}
@@ -690,7 +733,7 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
             steps = [{"step": "用户选择直接回答", "detail": "按当前已知信息处理"}]
             return _dispatch(db, user_id, original, steps, state,
                              allow_clarify=False, forced_intent=pending["intent"], slots=slots,
-                             on_status=on_status)
+                             on_status=on_status, file_context=file_context)
 
         steps = [{"step": "澄清补充", "detail": f"原问题「{original}」+ 补充「{message}」"}]
         if awaiting == "material":
@@ -723,7 +766,7 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
         # 槽位推进后重入流程：还有缺失槽位会继续问，齐了自然回答
         return _dispatch(db, user_id, original, steps, state,
                          allow_clarify=True, forced_intent=pending["intent"], slots=slots,
-                         on_status=on_status)
+                         on_status=on_status, file_context=file_context)
     # 跨轮次上下文：短指代消息（"那怎么接线""它还能干嘛"）沿用上一轮定位到的物料
     followup = _followup_slots(state, message)
     if followup and state.get("last", {}).get("intent") in ("troubleshoot", "explore"):
@@ -731,7 +774,7 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
         steps = [{"step": "上下文接续", "detail": f"沿用上一轮物料「{last['material_name']}」"}]
         return _dispatch(db, user_id, message, steps, state,
                          allow_clarify=True, forced_intent=last["intent"], slots=followup,
-                         on_status=on_status)
+                         on_status=on_status, file_context=file_context)
 
     return _dispatch(db, user_id, message, [], state, allow_clarify=True, forced_intent=None,
-                     on_status=on_status)
+                     on_status=on_status, file_context=file_context)

@@ -64,22 +64,24 @@ export async function askQuestion(question, materialId = null) {
 
 // 智能体对话（意图识别 + 澄清 + 多能力编排，返回 steps / provenance / clarify / bom）
 // 该链路含多次 LLM 调用（意图分类 + 联网检索 + 综合生成），耗时可达数十秒，单独放宽超时
-export async function agentChat(userId, message, convId) {
-  const { data } = await http.post('/agent/chat',
-    { user_id: userId, message, conv_id: convId },
-    { timeout: 120000 })
+export async function agentChat(userId, message, convId, fileContext = null) {
+  const body = { user_id: userId, message, conv_id: convId }
+  if (fileContext) body.file_context = fileContext
+  const { data } = await http.post('/agent/chat', body, { timeout: 120000 })
   return data
 }
 
 // 智能体对话（流式，过程显化）：fetch + NDJSON 逐行解析，status 事件实时回调 onStatus(text)，
 // final 事件 resolve 其 data；任何流错误或没有 final → 回退非流式 agentChat 兜底。
 // 返回与 agentChat 相同的响应体 { code, msg, data }，页面按 code 分支处理即可。
-export async function agentChatStream(userId, message, convId, onStatus) {
+export async function agentChatStream(userId, message, convId, onStatus, fileContext = null) {
   try {
+    const body = { user_id: userId, message, conv_id: convId }
+    if (fileContext) body.file_context = fileContext
     const resp = await fetch('/api/agent/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, message, conv_id: convId }),
+      body: JSON.stringify(body),
     })
     if (!resp.ok || !resp.body) throw new Error(`stream http ${resp.status}`)
     const reader = resp.body.getReader()
@@ -136,6 +138,39 @@ export async function fetchUsers() {
 // 登录认证（API.md 第 9.1 节）：成功 data 含 user_id/name/role；学号不存在或密码错统一 code 1008
 export async function login(userId, password) {
   const { data } = await http.post('/auth/login', { user_id: userId, password })
+  return data
+}
+
+// ---------- 文件上传与审核 ----------
+
+// 上传资料（图片/PDF/Word/TXT），需管理员审核后才并入知识库
+export async function uploadFile(userId, file, materialId = null) {
+  const formData = new FormData()
+  formData.append('user_id', userId)
+  if (materialId) formData.append('material_id', materialId)
+  formData.append('file', file)
+  const { data } = await http.post('/uploads', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30000,
+  })
+  return data
+}
+
+// 上传列表（管理端查全部，学生查自己的）
+export async function fetchUploads(userId = '', status = '') {
+  const { data } = await http.get('/uploads', { params: { user_id: userId, status } })
+  return data
+}
+
+// 单个上传记录详情（含解析文本，管理端预览用）
+export async function fetchUpload(uploadId) {
+  const { data } = await http.get(`/uploads/${uploadId}`)
+  return data
+}
+
+// 审核上传资料（管理端）：approve=true 通过并入知识库，false 驳回
+export async function reviewUpload(uploadId, approve, note = '') {
+  const { data } = await http.post(`/uploads/${uploadId}/review`, { approve, note })
   return data
 }
 

@@ -9,8 +9,10 @@ import {
   createMaterial,
   fetchMaterials,
   fetchRecords,
+  fetchUploads,
   fetchUsers,
   reviewBorrow,
+  reviewUpload,
 } from '../api'
 import { logout } from '../store'
 
@@ -22,7 +24,81 @@ function onLogout() {
   router.push('/login')
 }
 
-const currentView = ref('pending') // pending / active / records / batch / create
+const currentView = ref('pending') // pending / active / records / batch / create / uploads
+
+// ---------- 资料审核 ----------
+
+const uploads = ref([])
+const uploadsLoading = ref(false)
+const uploadReviewingId = ref('')
+const uploadRejectNote = ref('')
+const uploadRejectDialog = ref(false)
+const uploadRejectTarget = ref(null)
+
+async function loadUploads() {
+  uploadsLoading.value = true
+  try {
+    const res = await fetchUploads('', 'pending')
+    if (res.code === 0) {
+      uploads.value = res.data
+    } else {
+      ElMessage.error(res.msg)
+    }
+  } catch (e) {
+    ElMessage.error('网络错误：' + e.message)
+  } finally {
+    uploadsLoading.value = false
+  }
+}
+
+async function onUploadReview(u, approve) {
+  if (!approve) {
+    uploadRejectTarget.value = u
+    uploadRejectNote.value = ''
+    uploadRejectDialog.value = true
+    return
+  }
+  uploadReviewingId.value = u.upload_id
+  try {
+    const res = await reviewUpload(u.upload_id, true)
+    if (res.code === 0) {
+      ElMessage.success(res.msg)
+      await loadUploads()
+    } else {
+      ElMessage.warning(res.msg)
+    }
+  } catch (e) {
+    ElMessage.error('网络错误：' + e.message)
+  } finally {
+    uploadReviewingId.value = ''
+  }
+}
+
+async function onUploadRejectConfirm() {
+  const u = uploadRejectTarget.value
+  if (!u) return
+  uploadReviewingId.value = u.upload_id
+  try {
+    const res = await reviewUpload(u.upload_id, false, uploadRejectNote.value.trim())
+    if (res.code === 0) {
+      ElMessage.success('已驳回')
+      uploadRejectDialog.value = false
+      await loadUploads()
+    } else {
+      ElMessage.warning(res.msg)
+    }
+  } catch (e) {
+    ElMessage.error('网络错误：' + e.message)
+  } finally {
+    uploadReviewingId.value = ''
+  }
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+}
 
 // ---------- 审核申请 / 当前在借 / 全部流水（原 AdminPage 逻辑） ----------
 
@@ -231,6 +307,7 @@ async function onCreate() {
 
 watch(currentView, (v) => {
   if (v === 'batch') refreshMaterials() // 进批量借出时刷新库存，避免用过期的可借数
+  if (v === 'uploads') loadUploads() // 进资料审核时刷新列表
 })
 
 onMounted(async () => {
@@ -286,6 +363,18 @@ onMounted(async () => {
             <span class="side-idx lx-num">05</span>
             <span class="side-label">录入物料</span>
           </span>
+        </div>
+        <div class="item" :class="{ active: currentView === 'uploads' }" @click="currentView = 'uploads'">
+          <span class="side-main">
+            <span class="side-idx lx-num">06</span>
+            <span class="side-label">资料审核</span>
+          </span>
+          <el-badge
+            :value="uploads.length"
+            :show-zero="false"
+            type="danger"
+            class="side-badge"
+          />
         </div>
       </div>
       <div class="side-foot">
@@ -486,7 +575,7 @@ onMounted(async () => {
       </div>
 
       <!-- 录入物料：编号自动生成（开发板 A / 传感器 S / 驱动模块 M / 工具 T / 耗材 H / 设备 E） -->
-      <div v-else class="create">
+      <div v-else-if="currentView === 'create'" class="create">
         <div class="form-row">
           <span class="label">名称 *</span>
           <el-input v-model="form.name" placeholder="如：SG90 舵机" class="wide" />
@@ -541,6 +630,65 @@ onMounted(async () => {
           </el-button>
         </div>
       </div>
+
+      <!-- 资料审核：学生上传的资料，通过并入知识库 / 驳回 -->
+      <div v-else-if="currentView === 'uploads'" class="list" v-loading="uploadsLoading">
+        <el-card v-for="u in uploads" :key="u.upload_id" class="card" shadow="never">
+          <div class="row">
+            <span class="name">{{ u.filename }}</span>
+            <div class="actions">
+              <el-button
+                type="success"
+                size="small"
+                :loading="uploadReviewingId === u.upload_id"
+                @click="onUploadReview(u, true)"
+              >
+                通过
+              </el-button>
+              <el-button
+                type="danger"
+                size="small"
+                plain
+                :loading="uploadReviewingId === u.upload_id"
+                @click="onUploadReview(u, false)"
+              >
+                驳回
+              </el-button>
+            </div>
+          </div>
+          <div class="meta">
+            {{ u.user_name }}（{{ u.user_id }}）· {{ u.upload_id }}
+            <template v-if="u.material_name">· 关联物料：{{ u.material_name }}</template>
+            <template v-else>· 未关联物料</template>
+          </div>
+          <div class="times">
+            <span>类型 {{ u.file_type }}</span>
+            <span>大小 {{ fmtSize(u.file_size) }}</span>
+            <span>上传于 {{ fmt(u.created_at) }}</span>
+          </div>
+          <div v-if="u.parsed_text" class="reason">内容预览：{{ u.parsed_text.slice(0, 200) }}{{ u.parsed_text.length > 200 ? '…' : '' }}</div>
+        </el-card>
+        <el-empty v-if="!uploadsLoading && uploads.length === 0" description="没有待审核的资料">
+          <span class="empty-hint">学生上传的资料会流转到这里，通过后自动转为知识卡片并入向量库。</span>
+        </el-empty>
+      </div>
+
+      <!-- 驳回理由弹窗 -->
+      <el-dialog v-model="uploadRejectDialog" title="驳回资料" width="90%">
+        <p>确认驳回「{{ uploadRejectTarget?.filename }}」？</p>
+        <el-input
+          v-model="uploadRejectNote"
+          type="textarea"
+          :rows="3"
+          placeholder="驳回理由（可选）"
+        />
+        <template #footer>
+          <el-button @click="uploadRejectDialog = false">取消</el-button>
+          <el-button type="danger" :loading="uploadReviewingId === uploadRejectTarget?.upload_id" @click="onUploadRejectConfirm">
+            确认驳回
+          </el-button>
+        </template>
+      </el-dialog>
     </main>
   </div>
 </template>

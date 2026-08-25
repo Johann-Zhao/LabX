@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { agentChatStream, askQuestion, fetchMaterial, fetchMaterials, fetchRecords } from '../api'
+import { agentChatStream, askQuestion, fetchMaterial, fetchMaterials, fetchRecords, uploadFile } from '../api'
 import { currentUser } from '../store'
 import {
   appendMessage,
@@ -27,6 +27,70 @@ const input = ref('')
 const thinking = ref(false)
 const listRef = ref(null)
 const expandedSteps = ref({})
+
+// 文件上传：图片/PDF/Word/TXT，选择后显示预览条，发送时先上传再带 file_context
+const fileInputRef = ref(null)
+const selectedFile = ref(null) // { file, name, size, previewUrl? }
+const uploading = ref(false)
+
+function onPickFile() {
+  fileInputRef.value?.click()
+}
+
+function onFileChange(e) {
+  const f = e.target.files?.[0]
+  if (!f) return
+  const okTypes = [
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain', 'text/markdown',
+  ]
+  if (!okTypes.includes(f.type) && !/\.(jpg|jpeg|png|gif|webp|pdf|docx|txt|md)$/i.test(f.name)) {
+    ElMessage.warning('不支持的文件格式，请上传图片、PDF、Word 或 TXT')
+    e.target.value = ''
+    return
+  }
+  if (f.size > 10 * 1024 * 1024) {
+    ElMessage.warning('文件超过 10MB 限制')
+    e.target.value = ''
+    return
+  }
+  selectedFile.value = {
+    file: f,
+    name: f.name,
+    size: f.size,
+    previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+  }
+  e.target.value = '' // 允许重复选同一文件
+}
+
+function removeFile() {
+  if (selectedFile.value?.previewUrl) URL.revokeObjectURL(selectedFile.value.previewUrl)
+  selectedFile.value = null
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      const base64 = result.split(',')[1]
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+async function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsText(file, 'utf-8')
+  })
+}
 
 // 过程显化区（流式）：等待 final 期间逐行显示真实执行状态，最后一行带跳动圆点
 const streamLines = ref([])
@@ -179,14 +243,45 @@ onUnmounted(() => {
 
 async function send() {
   const question = input.value.trim()
-  if (!question || thinking.value) return
-  await sendText(question)
+  if ((!question && !selectedFile.value) || thinking.value) return
+  await sendText(question, selectedFile.value)
 }
 
 // 点击澄清选项/常用提问/能力矩阵 = 把文本作为下一条消息发送（同一会话）
-async function sendText(text) {
-  appendMessage({ role: 'user', text })
+async function sendText(text, fileInfo = null) {
+  let fileContext = null
+  if (fileInfo) {
+    uploading.value = true
+    try {
+      // 先上传文件到服务器（鼓励文案由后端返回）
+      const uploadRes = await uploadFile(currentUser.id, fileInfo.file, materialId)
+      if (uploadRes.code !== 0) {
+        ElMessage.error(uploadRes.msg)
+        uploading.value = false
+        return
+      }
+      ElMessage.success(uploadRes.msg)
+      // 构造 file_context 给智能体
+      if (fileInfo.file.type.startsWith('image/')) {
+        const base64 = await fileToBase64(fileInfo.file)
+        fileContext = { type: 'image', base64, mime: fileInfo.file.type, filename: fileInfo.name }
+      } else {
+        const text = await readFileAsText(fileInfo.file)
+        fileContext = { type: 'text', text, filename: fileInfo.name }
+      }
+    } catch (e) {
+      ElMessage.error('上传失败：' + e.message)
+      uploading.value = false
+      return
+    } finally {
+      uploading.value = false
+    }
+  }
+
+  const displayText = text || (fileInfo ? `请分析这份资料：${fileInfo.name}` : '')
+  appendMessage({ role: 'user', text: displayText, file: fileInfo ? { name: fileInfo.name, previewUrl: fileInfo.previewUrl } : null })
   input.value = ''
+  removeFile()
   thinking.value = true
   streamLines.value = []
   streamActive.value = true
@@ -194,11 +289,11 @@ async function sendText(text) {
   try {
     // 物料详情页进入 → 限定物料的 RAG 问答；否则走智能体编排（流式过程显化，失败自动回退非流式）
     const res = materialId
-      ? await askQuestion(text, materialId)
-      : await agentChatStream(currentUser.id, text, currentId(), (s) => {
+      ? await askQuestion(displayText, materialId)
+      : await agentChatStream(currentUser.id, displayText, currentId(), (s) => {
           streamLines.value.push(s)
           scrollToBottom()
-        })
+        }, fileContext)
     streamActive.value = false
     if (res.code === 0) {
       appendMessage({
@@ -367,6 +462,12 @@ async function scrollToBottom() {
               <span class="prov-dot" aria-hidden="true"></span>{{ PROVENANCE_META[m.provenance].text }}
             </span>
           </div>
+          <!-- 用户上传的文件预览 -->
+          <div v-if="m.file" class="msg-file">
+            <img v-if="m.file.previewUrl" :src="m.file.previewUrl" class="msg-file-thumb" alt="附件" />
+            <span v-else class="msg-file-icon">📄</span>
+            <span class="msg-file-name">{{ m.file.name }}</span>
+          </div>
 
           <!-- 澄清选项：点击即回答 -->
           <div v-if="m.clarify?.options?.length" class="chips">
@@ -439,6 +540,27 @@ async function scrollToBottom() {
       </div>
 
       <div class="input-bar">
+        <!-- 文件上传：图片/PDF/Word/TXT，选择后显示预览条 -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp,.pdf,.docx,.txt,.md"
+          style="display:none"
+          @change="onFileChange"
+        />
+        <el-button
+          class="upload-btn"
+          size="large"
+          :loading="uploading"
+          :disabled="thinking"
+          title="上传文件（图片/PDF/Word/TXT）"
+          aria-label="上传文件"
+          @click="onPickFile"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+          </svg>
+        </el-button>
         <el-input
           v-model="input"
           placeholder="描述你的问题或想法…"
@@ -468,6 +590,15 @@ async function scrollToBottom() {
           </svg>
         </el-button>
         <el-button type="primary" size="large" :loading="thinking" @click="send">发送</el-button>
+      </div>
+
+      <!-- 已选文件预览条：显示文件名与缩略图，可移除 -->
+      <div v-if="selectedFile" class="file-preview">
+        <img v-if="selectedFile.previewUrl" :src="selectedFile.previewUrl" class="file-thumb" alt="预览" />
+        <span v-else class="file-icon">📄</span>
+        <span class="file-name" :title="selectedFile.name">{{ selectedFile.name }}</span>
+        <span class="file-size lx-num">{{ (selectedFile.size / 1024).toFixed(1) }} KB</span>
+        <button type="button" class="file-remove" aria-label="移除文件" @click="removeFile">×</button>
       </div>
     </main>
 
@@ -1069,6 +1200,86 @@ async function scrollToBottom() {
 }
 .mic-btn {
   flex-shrink: 0;
+}
+.upload-btn {
+  flex-shrink: 0;
+}
+
+/* 已选文件预览条：输入栏上方一行，显示文件名与缩略图 */
+.file-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-2);
+  padding: var(--lx-space-2) var(--lx-space-4);
+  border-top: 1px solid var(--lx-border-lighter);
+  background: var(--lx-bg-subtle);
+  flex-shrink: 0;
+}
+.file-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--lx-radius-sm);
+  border: 1px solid var(--lx-border-light);
+}
+.file-icon {
+  font-size: var(--lx-text-lg);
+}
+.file-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--lx-text-sm);
+  color: var(--lx-text-regular);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-size {
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-placeholder);
+  flex-shrink: 0;
+}
+.file-remove {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  font-size: var(--lx-text-lg);
+  color: var(--lx-text-placeholder);
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.file-remove:hover {
+  color: var(--lx-danger);
+}
+
+/* 消息中的文件附件 */
+.msg-file {
+  display: flex;
+  align-items: center;
+  gap: var(--lx-space-2);
+  margin-top: var(--lx-space-1);
+  padding: var(--lx-space-2) var(--lx-space-3);
+  background: var(--lx-bg-subtle);
+  border-radius: var(--lx-radius-sm);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+}
+.msg-file-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--lx-radius-sm);
+  border: 1px solid var(--lx-border-light);
+}
+.msg-file-icon {
+  font-size: var(--lx-text-md);
+}
+.msg-file-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- 侧轨共用 ---------- */

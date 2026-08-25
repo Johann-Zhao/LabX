@@ -4,7 +4,7 @@
 - LABX_API_KEY / LABX_API_BASE / LABX_MODEL
 - LABX_LLM_MOCK=true 时所有调用返回预置兜底答案（演示断网也能跑，见 NFR2）
 
-注意：deepseek-v4-flash 带推理链，max_tokens 要给足，别卡太小。
+注意：deepseek-v4-flash-vision-exp 带推理链且支持图片输入，max_tokens 要给足，别卡太小。
 """
 import os
 
@@ -16,7 +16,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 API_KEY = os.getenv("LABX_API_KEY", "")
 BASE_URL = os.getenv("LABX_API_BASE", "https://api.deepseek.com/v1")
-MODEL = os.getenv("LABX_MODEL", "deepseek-v4-flash")
+MODEL = os.getenv("LABX_MODEL", "deepseek-v4-flash-vision-exp")
 MOCK = os.getenv("LABX_LLM_MOCK", "false").strip().lower() == "true"
 
 # 断网/无 key 时的兜底回答（通用排查建议，不绑定具体物料）
@@ -52,6 +52,37 @@ def chat(system: str, user: str, max_tokens: int = 1024, fallback: str | None = 
         except Exception:  # 网络不通、key 失效、超时等一律兜底
             continue
     return fallback
+
+def chat_with_image(system: str, user_text: str, image_base64: str,
+                    image_mime: str = "image/jpeg", max_tokens: int = 1024,
+                    fallback: str | None = MOCK_ANSWER, timeout: int = 45) -> str | None:
+    """多模态问答：文本 + 图片（base64），返回文本。任何异常都降级为 fallback，绝不向上抛。
+
+    image_base64：图片的 base64 编码字符串（不含 data: 前缀）。
+    image_mime：图片 MIME 类型，如 image/jpeg / image/png / image/webp。
+    """
+    if MOCK or not API_KEY:
+        return fallback
+    data_url = f"data:{image_mime};base64,{image_base64}"
+    for _attempt in range(2):
+        try:
+            client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=timeout)
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": user_text},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ]},
+                ],
+                max_tokens=max_tokens,
+            )
+            return (resp.choices[0].message.content or "").strip() or fallback
+        except Exception:
+            continue
+    return fallback
+
 
 def chat_with_search(system: str, user: str, max_tokens: int = 1024) -> str | None:
     """DeepSeek Responses API 原生联网搜索（tools=web_search，无需第三方搜索 key）。

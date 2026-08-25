@@ -113,6 +113,26 @@ class BorrowRecord(Base):
     review_reason = Column(Text)  # 学生申请超期借用时填写的理由
 
 
+class Upload(Base):
+    """用户上传的资料（图片/PDF/Word/TXT），需管理员审核后才并入知识库。
+
+    文件存储在 backend/uploads/ 目录，数据库只存元信息与解析后的文本。
+    """
+    __tablename__ = "uploads"
+
+    id = Column(String(48), primary_key=True)  # U-<uuid32>
+    user_id = Column(String(32), ForeignKey("users.id"), nullable=False)  # 上传者
+    material_id = Column(String(32), ForeignKey("materials.id"), nullable=True)  # 关联物料（可空）
+    filename = Column(String(300), nullable=False)  # 原始文件名
+    file_path = Column(String(500), nullable=False)  # 存储相对路径（uploads/xxx）
+    file_type = Column(String(50), nullable=False)  # image/pdf/docx/txt
+    file_size = Column(Integer, nullable=False)  # 字节数
+    status = Column(String(20), nullable=False, default="pending")  # pending/approved/rejected
+    review_note = Column(Text)  # 审核备注（驳回理由等）
+    parsed_text = Column(Text)  # 解析后的文本内容（PDF/Word/TXT），图片为空
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+
 class MaterialSequence(Base):
     """物料编号序列表：按分类前缀原子取号，替代"扫描同前缀最大序号+1"（并发安全）。
 
