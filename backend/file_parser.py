@@ -40,6 +40,8 @@ def parse_file(file_content: bytes, filename: str, content_type: str | None = No
     """
     if len(file_content) > MAX_FILE_SIZE:
         return {"ok": False, "msg": f"文件超过 10MB 限制（当前 {len(file_content) // 1024 // 1024}MB）"}
+    if len(file_content) == 0:
+        return {"ok": False, "msg": "文件是空的（0 字节），请确认文件已保存内容后再上传"}
 
     mime = guess_mime(filename, content_type)
 
@@ -63,6 +65,8 @@ def parse_file(file_content: bytes, filename: str, content_type: str | None = No
             text = file_content.decode("utf-8")
         except UnicodeDecodeError:
             text = file_content.decode("gbk", errors="replace")
+        if not text.strip():
+            return {"ok": False, "msg": "文件内容为空（全是空白字符），请补充有效内容后再上传"}
         return {"ok": True, "type": "text", "text": text, "filename": filename}
 
     return {"ok": False, "msg": f"不支持的文件格式：{mime}（支持图片/PDF/Word/TXT）"}

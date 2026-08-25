@@ -52,6 +52,11 @@ function onFileChange(e) {
     e.target.value = ''
     return
   }
+  if (f.size === 0) {
+    ElMessage.warning('文件是空的（0 字节），请确认文件已保存内容后再上传')
+    e.target.value = ''
+    return
+  }
   if (f.size > 10 * 1024 * 1024) {
     ElMessage.warning('文件超过 10MB 限制')
     e.target.value = ''
