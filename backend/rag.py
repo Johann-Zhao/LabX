@@ -91,12 +91,12 @@ def rebuild_from_db(cards) -> int:
     for c in cards:
         ids.append(c.id)
         docs.append(_doc_text(c))
-        metas.append({"material_id": c.material_id, "card_type": c.card_type})
+        # Chroma metadata 不接受 None：目录外卡片（material_id 为 NULL）存空串
+        metas.append({"material_id": c.material_id or "", "card_type": c.card_type})
     if ids:
         coll.add(ids=ids, documents=docs, metadatas=metas)
     _compute_df(docs)
     return len(ids)
-
 
 def add_card(card) -> None:
     """增量索引一张卡片（社区经验入库后调用），并更新 IDF 词表。"""
@@ -106,7 +106,7 @@ def add_card(card) -> None:
     coll.add(
         ids=[card.id],
         documents=[text],
-        metadatas=[{"material_id": card.material_id, "card_type": card.card_type}],
+        metadatas=[{"material_id": card.material_id or "", "card_type": card.card_type}],
     )
     _ensure_df()
     for feat in set(_features(text)):

@@ -666,7 +666,7 @@ onMounted(async () => {
             <span>大小 {{ fmtSize(u.file_size) }}</span>
             <span>上传于 {{ fmt(u.created_at) }}</span>
           </div>
-          <div v-if="u.parsed_text" class="reason">内容预览：{{ u.parsed_text.slice(0, 200) }}{{ u.parsed_text.length > 200 ? '…' : '' }}</div>
+          <div v-if="u.parsed_text" class="reason">提炼稿预览：{{ u.parsed_text.slice(0, 400) }}{{ u.parsed_text.length > 400 ? '…' : '' }}</div>
         </el-card>
         <el-empty v-if="!uploadsLoading && uploads.length === 0" description="没有待审核的资料">
           <span class="empty-hint">学生上传的资料会流转到这里，通过后自动转为知识卡片并入向量库。</span>

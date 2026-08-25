@@ -144,16 +144,18 @@ export async function login(userId, password) {
 // ---------- 文件上传与审核 ----------
 
 // 上传资料（图片/PDF/Word/TXT），需管理员审核后才并入知识库
-export async function uploadFile(userId, file, materialId = null, purpose = 'review') {
+export async function uploadFile(userId, file, materialId = null, purpose = 'review', materialLabel = null) {
   const formData = new FormData()
   formData.append('user_id', userId)
   if (materialId) formData.append('material_id', materialId)
   // purpose=review 进资料审核队列；purpose=chat 仅解析返回 file_context（对话临时附件）
   formData.append('purpose', purpose)
+  // 目录外物料名（如 RV1126B）：目录里没有对应物料时随投稿一起传
+  if (materialLabel) formData.append('material_label', materialLabel)
   formData.append('file', file)
   const { data } = await http.post('/uploads', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 30000,
+    timeout: 90000, // review 路径服务端要做 LLM 提炼，放宽超时
   })
   return data
 }

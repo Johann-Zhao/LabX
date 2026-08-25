@@ -795,7 +795,9 @@ def _upload_to_dict(u: Upload, user_name: str | None = None, material_name: str 
         "user_id": u.user_id,
         "user_name": user_name or u.user_id,
         "material_id": u.material_id,
-        "material_name": material_name,
+        # 目录内物料显示真名；目录外投稿显示"标签（目录外）"
+        "material_name": material_name or (f"{u.material_label}（目录外）" if u.material_label else None),
+        "material_label": u.material_label,
         "filename": u.filename,
         "file_type": u.file_type,
         "file_size": u.file_size,
@@ -805,15 +807,110 @@ def _upload_to_dict(u: Upload, user_name: str | None = None, material_name: str 
     }
 
 
+# 投稿资料提炼：结构化输出，保留关键硬信息、剔除冗余，便于后续检索定位（RAG 以 n-gram 特征匹配，
+# 型号/关键词行是检索锚点）
+_REFINE_PROMPT = (
+    "你是高校创新空间的知识库编辑。把同学投稿的资料整理成一张结构化知识卡片，供后续检索问答使用。\n"
+    "要求：\n"
+    "1. 保留绝大多数关键信息：型号/参数/引脚/电压电流/协议/接线/操作步骤/常见坑/代码要点等硬信息一条不漏；\n"
+    "2. 剔除无用内容：客套话、广告、版权声明、目录页码、重复段落、与主题无关的内容；\n"
+    "3. 严格按以下结构输出（纯文本，不用 markdown 表格）：\n"
+    "标题：一句话说清这是什么资料（含主体型号）\n"
+    "关键词：逗号分隔的检索词（型号/中文名/英文名/别名/相关协议，方便检索定位）\n"
+    "要点：\n- 每条一行，信息密度要高，3-8 条\n"
+    "适用场景：一句话（什么项目/什么问题用得上）\n"
+    "4. 总长 800 字以内；资料本身信息少就按实际来，不要编造。"
+)
+
+
+def _refine_upload(filename: str, parsed: dict) -> str | None:
+    """LLM 整合筛选投稿资料，返回结构化要点文本（检索友好）；失败返回 None 由调用方降级。
+
+    文本类（PDF/Word/TXT）：对提取文本提炼；图片：vision 识别后按同样结构描述。
+    """
+    import llm
+
+    if parsed["type"] == "image":
+        return llm.chat_with_image(
+            _REFINE_PROMPT,
+            f"这是一张投稿的资料图片（文件名：{filename}）。请识别图片内容并按要求的结构整理成知识卡片。",
+            parsed.get("base64", ""), parsed.get("mime", "image/jpeg"),
+            max_tokens=3000, fallback=None, timeout=60,
+        )
+    return llm.chat(
+        _REFINE_PROMPT,
+        f"文件名：{filename}\n资料内容：\n{parsed.get('text', '')[:6000]}",
+        max_tokens=3000, fallback=None, timeout=60,
+    )
+
+
+def _create_pending_upload(db: Session, user_id: str, material_id: str | None,
+                           material_label: str | None, filename: str,
+                           file_bytes: bytes, parsed: dict) -> dict:
+    """写文件 + LLM 提炼 + 建 pending 记录（REST 上传与对话内投稿共用）。"""
+    upload_id = new_upload_id()
+    safe_name = re.sub(r'[\\/:*?"<>|]', "_", filename)  # 防路径注入
+    file_path = os.path.join(UPLOAD_DIR, f"{upload_id}_{safe_name}")
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+
+    # 后台整合筛选：提炼关键信息、剔除冗余，审核与入卡都基于提炼稿
+    refined = _refine_upload(filename, parsed)
+    fallback_text = (parsed.get("text") or "")[:1500] if parsed["type"] == "text" else None
+
+    u = Upload(
+        id=upload_id,
+        user_id=user_id,
+        material_id=material_id,
+        material_label=(material_label or "").strip() or None,
+        filename=filename,
+        file_path=os.path.relpath(file_path, os.path.dirname(UPLOAD_DIR)),
+        file_type=parsed["type"],
+        file_size=len(file_bytes),
+        status="pending",
+        parsed_text=refined or fallback_text,
+        created_at=datetime.now(),
+    )
+    db.add(u)
+    db.commit()
+    return _resp(0, _UPLOAD_THANKS, _upload_to_dict(u))
+
+
+def persist_parsed_upload(db: Session, user_id: str, file_context: dict,
+                          material_id: str | None = None, material_label: str | None = None) -> dict:
+    """从对话附件的解析结果（file_context）直接生成待审投稿记录（对话内投稿用）。
+
+    file_context 即 file_parser 的解析结果：文本类存提炼文本、图片还原原始字节。
+    """
+    import base64
+
+    if db.get(User, user_id) is None:
+        return _resp(404, f"用户 {user_id} 不存在")
+    if material_id and db.get(Material, material_id) is None:
+        return _resp(404, f"物料 {material_id} 不存在")
+
+    filename = file_context.get("filename", "未命名")
+    if file_context.get("type") == "image":
+        b64 = file_context.get("base64", "")
+        file_bytes = base64.b64decode(b64) if b64 else b""
+        parsed = {"type": "image", "base64": b64, "mime": file_context.get("mime", "image/jpeg")}
+    else:
+        text = file_context.get("text", "")
+        file_bytes = text.encode("utf-8")
+        parsed = {"type": "text", "text": text}
+    return _create_pending_upload(db, user_id, material_id, material_label, filename, file_bytes, parsed)
+
+
 def upload_file_core(db: Session, user_id: str, material_id: str | None,
                      filename: str, file_content: bytes, content_type: str | None,
-                     persist: bool = True) -> dict:
+                     persist: bool = True, material_label: str | None = None) -> dict:
     """保存上传文件并解析内容，返回上传记录与鼓励文案。
 
-    文件写入 backend/uploads/，解析后的文本存入 parsed_text（图片不存文本）。
-    任何格式不支持或超大文件都会提前返回错误。
+    入库前由 LLM 整合筛选成结构化要点存入 parsed_text（见 _refine_upload，
+    LLM 不可用时降级为原文截断）。任何格式不支持或超大文件都会提前返回错误。
     persist=False 用于对话临时附件（purpose=chat）：只解析并返回 file_context，
     不落盘、不进资料审核队列——"问问题带的附件"不等于"向知识库投稿"。
+    material_label：目录外物料名称（目录里没有对应物料时填，如 RV1126B）。
     """
     from file_parser import parse_file
 
@@ -831,27 +928,8 @@ def upload_file_core(db: Session, user_id: str, material_id: str | None,
         file_context = {k: v for k, v in parsed.items() if k != "ok"}
         return _resp(0, "ok", {"file_context": file_context})
 
-    upload_id = new_upload_id()
-    safe_name = re.sub(r'[\\/:*?"<>|]', "_", filename)  # 防路径注入
-    file_path = os.path.join(UPLOAD_DIR, f"{upload_id}_{safe_name}")
-    with open(file_path, "wb") as f:
-        f.write(file_content)
-
-    u = Upload(
-        id=upload_id,
-        user_id=user_id,
-        material_id=material_id,
-        filename=filename,
-        file_path=os.path.relpath(file_path, os.path.dirname(UPLOAD_DIR)),
-        file_type=parsed["type"],
-        file_size=len(file_content),
-        status="pending",
-        parsed_text=parsed.get("text") if parsed["type"] == "text" else None,
-        created_at=datetime.now(),
-    )
-    db.add(u)
-    db.commit()
-    return _resp(0, _UPLOAD_THANKS, _upload_to_dict(u))
+    return _create_pending_upload(db, user_id, material_id, material_label,
+                                  filename, file_content, parsed)
 
 
 def list_uploads_core(db: Session, status: str | None = None, user_id: str | None = None) -> dict:
@@ -885,7 +963,7 @@ def get_upload_core(db: Session, upload_id: str) -> dict:
 def review_upload_core(db: Session, upload_id: str, approve: bool, note: str = "") -> dict:
     """管理员审核上传资料：通过则转为知识卡片（tip），驳回则标记 rejected。
 
-    通过时：若有关联物料，生成该物料的 tip 卡片；无关联物料则生成通用 tip（material_id 为 "GENERAL"）。
+    通过时：若有关联物料，生成该物料的 tip 卡片；目录外投稿（material_label）生成通用 tip（material_id 为 NULL）。
     """
     import rag
 
@@ -903,16 +981,21 @@ def review_upload_core(db: Session, upload_id: str, approve: bool, note: str = "
 
     # 审核通过：生成知识卡片
     u.status = "approved"
-    material_id = u.material_id or "GENERAL"
+    material_id = u.material_id  # 目录外投稿为 NULL（通用卡片，全库开放检索仍可命中）
     material = db.get(Material, material_id) if u.material_id else None
-    material_name = material.name if material else "通用资料"
+    material_name = material.name if material else (u.material_label or "通用资料")
+
+    # 提炼稿首行是"标题：…"（_refine_upload 的结构约定），优先用作卡片标题，检索更友好
+    refined_title = None
+    if u.parsed_text and u.parsed_text.startswith("标题："):
+        refined_title = u.parsed_text.splitlines()[0].removeprefix("标题：").strip()[:60] or None
 
     n = db.query(KnowledgeCard).count()
     card = KnowledgeCard(
         id=f"KC-UPLOAD-{1000 + n}",
         material_id=material_id,
         card_type="tip",
-        title=f"{u.filename}（{material_name}）",
+        title=refined_title or f"{u.filename}（{material_name}）",
         points=json.dumps([f"来源：{u.user_id} 上传分享", f"文件类型：{u.file_type}"], ensure_ascii=False),
         content=u.parsed_text or f"[图片资料] {u.filename}，请查看原文件。",
         contributor_id=u.user_id,

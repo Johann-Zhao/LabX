@@ -123,13 +123,14 @@ class Upload(Base):
     id = Column(String(48), primary_key=True)  # U-<uuid32>
     user_id = Column(String(32), ForeignKey("users.id"), nullable=False)  # 上传者
     material_id = Column(String(32), ForeignKey("materials.id"), nullable=True)  # 关联物料（可空）
+    material_label = Column(String(100), nullable=True)  # 目录外物料名称（RV1126B 等，目录里没有时填）
     filename = Column(String(300), nullable=False)  # 原始文件名
     file_path = Column(String(500), nullable=False)  # 存储相对路径（uploads/xxx）
     file_type = Column(String(50), nullable=False)  # image/pdf/docx/txt
     file_size = Column(Integer, nullable=False)  # 字节数
     status = Column(String(20), nullable=False, default="pending")  # pending/approved/rejected
     review_note = Column(Text)  # 审核备注（驳回理由等）
-    parsed_text = Column(Text)  # 解析后的文本内容（PDF/Word/TXT），图片为空
+    parsed_text = Column(Text)  # 提炼后的结构化资料内容（LLM 整合筛选；图片为 vision 描述），审核通过后作为知识卡片正文
     created_at = Column(DateTime, nullable=False, default=datetime.now)
 
 
@@ -148,7 +149,7 @@ class KnowledgeCard(Base):
     __tablename__ = "knowledge_cards"
 
     id = Column(String(64), primary_key=True)  # KC-<文件名>，如 KC-S-003-manual
-    material_id = Column(String(32), ForeignKey("materials.id"), nullable=False)  # 关联物料 ID
+    material_id = Column(String(32), ForeignKey("materials.id"), nullable=True)  # 关联物料 ID（目录外投稿卡片为 NULL，全库开放检索仍可命中）
     card_type = Column(String(20), nullable=False)  # manual/quickstart/common_errors/tip
     title = Column(String(300), nullable=False)
     points = Column(Text, nullable=False, default="[]")  # 三条要点，JSON 数组字符串

@@ -32,6 +32,7 @@ const expandedSteps = ref({})
 const fileInputRef = ref(null)
 const selectedFile = ref(null) // { file, name, size, previewUrl? }
 const uploading = ref(false)
+const lastChatFile = ref(null) // 最近一次发送的附件（投稿邀请确认时重新上传用）
 
 function onPickFile() {
   fileInputRef.value?.click()
@@ -68,6 +69,34 @@ function onFileChange(e) {
 function removeFile() {
   if (selectedFile.value?.previewUrl) URL.revokeObjectURL(selectedFile.value.previewUrl)
   selectedFile.value = null
+}
+
+// 投稿邀请（upload_offer）：知识库未收录的附件资料，用户一键投稿进审核队列
+async function acceptUploadOffer(m) {
+  if (!lastChatFile.value) {
+    ElMessage.warning('找不到刚才的附件，请重新用回形针选择文件后说"上传这份资料"')
+    m.uploadOffer = null
+    return
+  }
+  m.offerBusy = true
+  try {
+    const res = await uploadFile(currentUser.id, lastChatFile.value.file, null, 'review', m.uploadOffer.material_label)
+    if (res.code === 0) {
+      ElMessage.success(res.msg)
+      m.uploadOffer = null
+      m.offerDone = true
+    } else {
+      ElMessage.error(res.msg)
+    }
+  } catch (e) {
+    ElMessage.error('投稿失败：' + e.message)
+  } finally {
+    m.offerBusy = false
+  }
+}
+
+function declineUploadOffer(m) {
+  m.uploadOffer = null
 }
 
 // 过程显化区（流式）：等待 final 期间逐行显示真实执行状态，最后一行带跳动圆点
@@ -256,6 +285,7 @@ async function sendText(text, fileInfo = null) {
 
   const displayText = text || (fileInfo ? `请分析这份资料：${fileInfo.name}` : '')
   appendMessage({ role: 'user', text: displayText, file: fileInfo ? { name: fileInfo.name, previewUrl: fileInfo.previewUrl } : null })
+  if (fileInfo) lastChatFile.value = fileInfo // 留底：答后投稿邀请确认时用它重新上传（purpose=review）
   input.value = ''
   removeFile()
   thinking.value = true
@@ -282,6 +312,7 @@ async function sendText(text, fileInfo = null) {
         provenance: res.data.provenance || null,
         clarify: res.data.clarify || null,
         bom: res.data.bom || null,
+        uploadOffer: res.data.upload_offer || null, // 知识库未收录的资料附件 → 投稿邀请
       })
     } else {
       ElMessage.error(res.msg)
@@ -459,6 +490,16 @@ async function scrollToBottom() {
               {{ opt }}
             </el-button>
           </div>
+
+          <!-- 投稿邀请：知识库未收录的附件资料，可选择贡献给社区（提炼后由管理员审核） -->
+          <div v-if="m.uploadOffer" class="upload-offer">
+            <span class="offer-text">这份资料知识库还没收录，要投稿给社区吗？我会提炼要点后提交管理员审核。</span>
+            <span class="offer-actions">
+              <el-button size="small" round type="primary" :loading="m.offerBusy" @click="acceptUploadOffer(m)">投稿到知识库</el-button>
+              <el-button size="small" round text @click="declineUploadOffer(m)">不用了</el-button>
+            </span>
+          </div>
+          <div v-else-if="m.offerDone" class="offer-done">✓ 已投稿，等待管理员审核</div>
 
           <!-- 愿望到方案：BOM 卡片内联（清单一键预约） -->
           <BomCard v-if="m.bom" :bom="m.bom" />
@@ -1086,6 +1127,32 @@ async function scrollToBottom() {
   flex-wrap: wrap;
   gap: var(--lx-space-2);
   margin-top: var(--lx-space-2);
+}
+/* 投稿邀请：附件资料未收录时的可选动作条 */
+.upload-offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lx-space-2);
+  margin-top: var(--lx-space-2);
+  padding: var(--lx-space-2) var(--lx-space-3);
+  background: var(--lx-bg-subtle);
+  border: 1px dashed var(--lx-border);
+  border-radius: var(--lx-radius-sm);
+}
+.offer-text {
+  font-size: var(--lx-text-xs);
+  color: var(--lx-text-secondary);
+  flex: 1 1 220px;
+}
+.offer-actions {
+  display: flex;
+  gap: var(--lx-space-1);
+}
+.offer-done {
+  margin-top: var(--lx-space-2);
+  font-size: var(--lx-text-xs);
+  color: var(--lx-green);
 }
 .chip {
   margin-left: 0 !important;

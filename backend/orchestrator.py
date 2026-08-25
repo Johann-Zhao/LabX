@@ -25,6 +25,8 @@ INTENT_LABELS = {
     "recommend": "项目求推荐",
     "inventory": "查库存",
     "chitchat": "闲聊/其他",
+    "contribute": "投稿资料",
+    "file": "附件问答",
 }
 
 # 关键词兜底规则：LLM 意图识别失败时使用（断网演示也能分流）
@@ -52,6 +54,18 @@ _GENERIC_MENTIONS = {
 # 指代/接续词：短消息命中且上一轮刚聊过某件物料 → 视为跟进该物料（跨轮次上下文）
 _FOLLOWUP_WORDS = ("它", "这个", "那个", "这块", "那台", "这", "那", "怎么接", "接线", "还能干嘛",
                   "还能做什么", "怎么烧录", "怎么连", "引脚", "多少钱", "哪里借")
+
+# 投稿意图（对话内上传资料给知识库）：明确的投稿动词，或"上传+资料/文档类名词"组合
+# 注意排除排障场景的"代码上传失败"——单靠"上传"两个字不算投稿
+_CONTRIBUTE_WORDS = ("投稿", "分享给知识库", "放到知识库", "发到知识库", "存入知识库", "上传到知识库", "贡献资料")
+_CONTRIBUTE_NOUNS = ("资料", "文档", "手册", "参考", "笔记", "教程", "datasheet", "说明书")
+
+
+def _is_contribute(message: str) -> bool:
+    """判断消息是否表达"把资料投稿给知识库"的意图（关键词级，带附件时触发，省一次分类调用）。"""
+    if any(w in message for w in _CONTRIBUTE_WORDS):
+        return True
+    return "上传" in message and any(w in message for w in _CONTRIBUTE_NOUNS)
 
 # 会话状态最多保留 200 个 conv（内存演示规模，防长期运行越积越多）
 _MAX_CONV_STATES = 200
@@ -339,11 +353,16 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
         file_text = f"\n\n【用户上传的文件内容：{file_context.get('filename', '未命名')}】\n{file_context.get('text', '')[:1500]}"
         question = question + file_text
 
-    # 1. 本地知识库：仅当型号对应（目录内物料）。
-    #    自带物料无型号对应，直接跳过；目录内物料检索未命中时也不拿其他物料卡片凑数。
+    # 1. 本地知识库：仅当"强相关"时使用。
+    #    目录内物料按物料内阈值检索；自带物料（目录外）也检索全库——
+    #    社区投稿可能正好收录了该型号（rag 的型号词守卫保证命中必须含该型号，不会假命中）。
     hits = []
     if custom_material:
-        steps.append({"step": "自带物料，本地无对应型号", "detail": "跳过本地，直接联网检索"})
+        on_status("正在检索本地知识库（含社区投稿）…")
+        hits = rag.query(query_text, top_k=3)
+        hits = [h for h in hits if h["score"] >= LOCAL_HIT_THRESHOLD_OPEN]
+        if not hits:
+            steps.append({"step": "自带物料，本地无对应资料", "detail": "跳过本地，直接联网检索"})
     else:
         on_status("正在检索本地知识库…")
         hits = rag.query(query_text, material_id=target.id if target else None, top_k=3)
@@ -630,11 +649,12 @@ def _chitchat(db, message: str, steps: list, on_status=None, file_context: dict 
     })
 
 
-def _file_answer(message: str, steps: list, on_status, file_context: dict) -> dict:
+def _file_answer(db, message: str, steps: list, on_status, file_context: dict) -> dict:
     """带附件的提问：文件本身就是问题主体，跳过意图识别与槽位澄清，直接按文件内容回答。
 
     图片走 vision 模型直答；文本内容注入问题后走本地→联网→通用阶梯
     （_ladder_answer 内部处理），不套排障格式。
+    回答后若资料是知识库未覆盖的文本类内容，附上投稿邀请（upload_offer），用户可选。
     """
     steps.insert(0, {"step": "多模态输入",
                      "detail": f"附件「{file_context.get('filename', '未命名')}」即问题主体，直接解析回答"})
@@ -643,9 +663,73 @@ def _file_answer(message: str, steps: list, on_status, file_context: dict) -> di
         role=_FILE_ROLE, answer_format=_FILE_FORMAT, on_status=on_status,
         file_context=file_context,
     )
-    return _resp(0, "ok", {
+    data = {
         "intent": "file", "steps": steps,
         "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
+    }
+    offer = _maybe_upload_offer(file_context)
+    if offer:
+        data["upload_offer"] = offer
+        steps.append({"step": "知识库未收录这份资料", "detail": "已向用户发出投稿邀请（可选）"})
+    return _resp(0, "ok", data)
+
+
+def _maybe_upload_offer(file_context: dict) -> dict | None:
+    """文本类附件且本地知识库未覆盖时返回邀稿信息；已覆盖/图片/太短则不打扰。
+
+    图片不走文本索引无法判重，不主动邀稿（用户仍可主动说"上传这份资料"投稿）。
+    """
+    if file_context.get("type") != "text":
+        return None
+    text = (file_context.get("text") or "").strip()
+    if len(text) < 50:
+        return None  # 太短没有投稿价值
+    hits = rag.query(text[:300], top_k=1)
+    if hits and hits[0]["score"] >= LOCAL_HIT_THRESHOLD_OPEN:
+        return None  # 本地已有覆盖，不重复收录
+    stem = re.sub(r"\.[A-Za-z0-9]+$", "", file_context.get("filename", "")).strip()
+    return {"filename": file_context.get("filename", "未命名"), "material_label": stem or None}
+
+
+def _contribute(db, user_id: str, message: str, steps: list, on_status, file_context: dict) -> dict:
+    """对话内投稿：带附件表达"上传/投稿/分享"意图 → 提炼后转入资料审核队列（管理员终审）。
+
+    物料可以是目录外的：目录匹配不上时记 material_label（如 RV1126B），
+    审核通过后生成通用知识卡片，同样可被检索。
+    """
+    import services
+
+    steps.insert(0, {"step": "意图识别", "detail": "识别为「投稿资料」"})
+    on_status("正在提炼资料要点并提交审核…")
+    # 借意图分类器提取消息里的具体型号（RV1126B 等），尝试关联目录内物料
+    _, mention = classify_intent(message)
+    material_id, material_label, material_name = None, None, None
+    if mention:
+        m = db.query(Material).filter(Material.name.contains(mention)).first()
+        if m:
+            material_id, material_name = m.id, m.name
+        else:
+            material_label = mention
+    if not material_id and not material_label:
+        # 没提物料名：用文件名主干兜底，管理员审核时再判断
+        material_label = re.sub(r"\.[A-Za-z0-9]+$", "", file_context.get("filename", "")).strip() or None
+
+    res = services.persist_parsed_upload(db, user_id, file_context, material_id, material_label)
+    if res["code"] != 0:
+        return _resp(res["code"], res["msg"], {
+            "intent": "contribute", "steps": steps,
+            "answer": f"投稿失败：{res['msg']}", "references": [], "provenance": None, "clarify": None,
+        })
+    where = (f"已关联物料「{material_name}」" if material_id
+             else f"这是目录外物料「{material_label}」，审核通过后会作为通用资料收录" if material_label
+             else "暂未关联物料")
+    steps.append({"step": "资料已提炼并转交审核", "detail": where})
+    answer = (f"收到你的分享！我已把《{file_context.get('filename', '资料')}》提炼成要点卡片，"
+              f"提交给管理员审核，{where}。审核通过后全社区同学都能检索到它——"
+              f"感谢你的贡献，知识库因你更厚一层。")
+    return _resp(0, "ok", {
+        "intent": "contribute", "steps": steps, "answer": answer,
+        "references": [], "provenance": None, "clarify": None,
     })
 
 
@@ -740,6 +824,7 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
     state["last_ts"] = time.time()
 
     # 多模态文件上下文：有文件时先记录状态，并把文件内容注入消息
+    raw_message = message  # 注入前的原始消息（投稿意图判定只认用户原话，防注入文本里的"上传/笔记"误判）
     if file_context:
         filename = file_context.get("filename", "未命名文件")
         ftype = file_context.get("type")
@@ -757,7 +842,20 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
     # 带附件的新提问（非澄清补充）：文件本身就是问题主体，
     # 跳过意图识别与槽位澄清，直接按文件内容回答（"这是什么"不该被反问"哪个物料"）
     if file_context and not state.get("pending"):
-        return _file_answer(message, [], on_status, file_context)
+        # 投稿意图（"上传 RV1126B 的参考文档"）→ 提炼后转入资料审核队列
+        if _is_contribute(raw_message):
+            return _contribute(db, user_id, raw_message, [], on_status, file_context)
+        return _file_answer(db, message, [], on_status, file_context)
+
+    # 无附件的投稿意图：引导用输入栏左侧回形针选择文件
+    if not file_context and not state.get("pending") and _is_contribute(message):
+        return _resp(0, "ok", {
+            "intent": "contribute",
+            "steps": [{"step": "意图识别", "detail": "识别为「投稿资料」，但未检测到附件"}],
+            "answer": "好的，欢迎分享！请点输入栏左侧的回形针按钮选择要上传的资料文件"
+                      "（支持图片/PDF/Word/TXT），再发送一次这句话，我会提炼要点后提交管理员审核。",
+            "references": [], "provenance": None, "clarify": None,
+        })
 
     pending = state.pop("pending", None)
     if pending:
