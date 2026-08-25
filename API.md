@@ -303,7 +303,7 @@ GET /api/cards/{card_id}
 ```
 POST /api/uploads
 Content-Type: multipart/form-data
-参数: user_id（表单字段）, material_id（可选，表单字段）, file（文件）
+参数: user_id（表单字段）, material_id（可选，表单字段）, purpose（可选，表单字段）, file（文件）
 返回: { "code": 0, "msg": "感谢分享！你的资料已收到，管理员审核通过后就会并入知识库帮助更多同学。",
        "data": { "upload_id": "U-xxx", "user_id": "2024001", "material_id": "A-017",
                  "filename": "L298N接线图.pdf", "file_type": "text", "file_size": 10240,
@@ -313,7 +313,8 @@ Content-Type: multipart/form-data
 说明：
 - 支持格式：图片（jpg/png/gif/webp）、PDF、Word(docx)、TXT/MD。
 - 文件大小限制 10MB，超出返回 `code: 1009`。
-- 上传后 `status=pending`，需管理员审核（第 11.3 节）通过后才并入知识库。
+- `purpose=review`（默认）：上传后 `status=pending`，需管理员审核（第 11.3 节）通过后才并入知识库。
+- `purpose=chat`（对话临时附件）：只解析文件并返回 `data.file_context`（图片为 base64、PDF/Word/TXT 为提取文本），**不落库、不进审核队列**——"带附件问问题"不等于"向知识库投稿"。此时 `msg` 为 `"ok"`。
 - `file_type`：`image` / `text`（PDF/Word/TXT 解析后为文本）。
 
 ### 11.2 上传列表
@@ -373,4 +374,6 @@ POST /api/uploads/{upload_id}/review
 说明：
 - `file_context.type=image`：智能助手调用 vision 模型直接识别图片内容。
 - `file_context.type=text`：文件文本注入 prompt 作为上下文，与本地知识库/联网检索共同参与回答。
+- **带附件的消息跳过意图识别与槽位澄清**：文件本身就是问题主体（如"这是什么"+图片直接识别回答），不再反问"是哪个物料"。
+- 前端对话附件的 `file_context` 由 `POST /api/uploads`（`purpose=chat`）解析返回，不重复造轮子。
 - 图片大小建议前端压缩到 1024px 以内，base64 后不超过 5MB。

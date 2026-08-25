@@ -70,28 +70,6 @@ function removeFile() {
   selectedFile.value = null
 }
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      const base64 = result.split(',')[1]
-      resolve(base64)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-async function readFileAsText(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = reject
-    reader.readAsText(file, 'utf-8')
-  })
-}
-
 // 过程显化区（流式）：等待 final 期间逐行显示真实执行状态，最后一行带跳动圆点
 const streamLines = ref([])
 const streamActive = ref(false)
@@ -253,24 +231,22 @@ async function sendText(text, fileInfo = null) {
   if (fileInfo) {
     uploading.value = true
     try {
-      // 先上传文件到服务器（鼓励文案由后端返回）
-      const uploadRes = await uploadFile(currentUser.id, fileInfo.file, materialId)
+      // 对话附件：purpose=chat，服务端只解析返回 file_context（图片 base64 / PDF/Word 提取文本），
+      // 不落库、不进资料审核队列——"带附件问问题"不等于"向知识库投稿"
+      const uploadRes = await uploadFile(currentUser.id, fileInfo.file, null, 'chat')
       if (uploadRes.code !== 0) {
         ElMessage.error(uploadRes.msg)
         uploading.value = false
         return
       }
-      ElMessage.success(uploadRes.msg)
-      // 构造 file_context 给智能体
-      if (fileInfo.file.type.startsWith('image/')) {
-        const base64 = await fileToBase64(fileInfo.file)
-        fileContext = { type: 'image', base64, mime: fileInfo.file.type, filename: fileInfo.name }
-      } else {
-        const text = await readFileAsText(fileInfo.file)
-        fileContext = { type: 'text', text, filename: fileInfo.name }
+      fileContext = uploadRes.data?.file_context || null
+      if (!fileContext) {
+        ElMessage.error('文件解析失败，请换个文件试试')
+        uploading.value = false
+        return
       }
     } catch (e) {
-      ElMessage.error('上传失败：' + e.message)
+      ElMessage.error('文件解析失败：' + e.message)
       uploading.value = false
       return
     } finally {
@@ -287,8 +263,9 @@ async function sendText(text, fileInfo = null) {
   streamActive.value = true
   scrollToBottom()
   try {
-    // 物料详情页进入 → 限定物料的 RAG 问答；否则走智能体编排（流式过程显化，失败自动回退非流式）
-    const res = materialId
+    // 物料详情页进入 → 限定物料的 RAG 问答（带附件时除外：附件走智能体编排的多模态通路）；
+    // 否则走智能体编排（流式过程显化，失败自动回退非流式）
+    const res = materialId && !fileContext
       ? await askQuestion(displayText, materialId)
       : await agentChatStream(currentUser.id, displayText, currentId(), (s) => {
           streamLines.value.push(s)

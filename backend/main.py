@@ -341,12 +341,18 @@ def share_experience(req: ExperienceReq, db: Session = Depends(get_db)):
 async def upload_file(
     user_id: str = Form(...),
     material_id: str | None = Form(None),
+    purpose: str = Form("review"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    """上传资料（图片/PDF/Word/TXT），需管理员审核后才并入知识库。"""
+    """上传资料（图片/PDF/Word/TXT）。
+
+    purpose=review（默认）：落库进资料审核队列，管理员通过后才并入知识库；
+    purpose=chat：对话临时附件，只解析返回 file_context，不落库、不进审核队列。
+    """
     content = await file.read()
-    return upload_file_core(db, user_id, material_id, file.filename, content, file.content_type)
+    return upload_file_core(db, user_id, material_id, file.filename, content,
+                            file.content_type, persist=(purpose != "chat"))
 
 
 @app.get("/api/uploads")

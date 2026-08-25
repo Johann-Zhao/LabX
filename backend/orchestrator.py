@@ -257,6 +257,19 @@ _EXPLORE_FORMAT = (
     "④深入学习入口（官方文档/教程名称或网址）\n"
 )
 
+# 带附件提问专用：文件本身就是问题主体，跳过意图分类与澄清（见 docs/agent-workflow.md）
+_FILE_ROLE = (
+    "你是高校创新空间的助教，擅长识别电子元器件/物料（图片里的型号丝印要读出来），"
+    "也能阅读理解学生上传的文档。围绕学生的问题直接回答，语气友好、可操作，250 字以内。"
+)
+_FILE_FORMAT = (
+    "输出格式：若学生问\"这是什么/是什么物料\"，按下面结构回答：\n"
+    "①这是什么（名称/型号，图中有丝印或标题要读出来）\n"
+    "②能做什么（关键用途/参数，一两句）\n"
+    "③上手第一步或深入学习入口（一句）\n"
+    "若学生的问题是其他具体问题，直接围绕问题回答，不必套上面的结构。\n"
+)
+
 
 def _web_refs(raw: str) -> list[dict]:
     """从联网回答里提取引用：优先 markdown 链接，其次裸 URL。"""
@@ -312,7 +325,7 @@ def _ladder_answer(question: str, target, spare_text: str, names: str, steps: li
             image_prompt,
             file_context.get("base64", ""),
             file_context.get("mime", "image/jpeg"),
-            max_tokens=800,
+            max_tokens=3000,  # vision-exp 推理链烧输出预算，给足（同 chat_with_search 的经验）
             fallback=None,
         )
         if raw:
@@ -617,6 +630,25 @@ def _chitchat(db, message: str, steps: list, on_status=None, file_context: dict 
     })
 
 
+def _file_answer(message: str, steps: list, on_status, file_context: dict) -> dict:
+    """带附件的提问：文件本身就是问题主体，跳过意图识别与槽位澄清，直接按文件内容回答。
+
+    图片走 vision 模型直答；文本内容注入问题后走本地→联网→通用阶梯
+    （_ladder_answer 内部处理），不套排障格式。
+    """
+    steps.insert(0, {"step": "多模态输入",
+                     "detail": f"附件「{file_context.get('filename', '未命名')}」即问题主体，直接解析回答"})
+    answer, refs, provenance = _ladder_answer(
+        message, None, "", "", steps,
+        role=_FILE_ROLE, answer_format=_FILE_FORMAT, on_status=on_status,
+        file_context=file_context,
+    )
+    return _resp(0, "ok", {
+        "intent": "file", "steps": steps,
+        "answer": answer, "references": refs, "provenance": provenance, "clarify": None,
+    })
+
+
 def _recommend(db, user_id: str, message: str, steps: list, on_status=None) -> dict:
     on_status = on_status or _noop_status
     on_status("正在生成全链路方案与物料清单…")
@@ -721,6 +753,11 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
             message = f"{message}\n[用户上传了文件：{filename}]\n文件内容：\n{text}"
         on_status = on_status or _noop_status
         on_status(f"已接收并解析上传文件：{filename}")
+
+    # 带附件的新提问（非澄清补充）：文件本身就是问题主体，
+    # 跳过意图识别与槽位澄清，直接按文件内容回答（"这是什么"不该被反问"哪个物料"）
+    if file_context and not state.get("pending"):
+        return _file_answer(message, [], on_status, file_context)
 
     pending = state.pop("pending", None)
     if pending:

@@ -806,11 +806,14 @@ def _upload_to_dict(u: Upload, user_name: str | None = None, material_name: str 
 
 
 def upload_file_core(db: Session, user_id: str, material_id: str | None,
-                     filename: str, file_content: bytes, content_type: str | None) -> dict:
+                     filename: str, file_content: bytes, content_type: str | None,
+                     persist: bool = True) -> dict:
     """保存上传文件并解析内容，返回上传记录与鼓励文案。
 
     文件写入 backend/uploads/，解析后的文本存入 parsed_text（图片不存文本）。
     任何格式不支持或超大文件都会提前返回错误。
+    persist=False 用于对话临时附件（purpose=chat）：只解析并返回 file_context，
+    不落盘、不进资料审核队列——"问问题带的附件"不等于"向知识库投稿"。
     """
     from file_parser import parse_file
 
@@ -822,6 +825,11 @@ def upload_file_core(db: Session, user_id: str, material_id: str | None,
     parsed = parse_file(file_content, filename, content_type)
     if not parsed["ok"]:
         return _resp(400, parsed["msg"])
+
+    if not persist:
+        # 对话临时附件：解析结果直接作为 file_context 返回，不产生待审记录
+        file_context = {k: v for k, v in parsed.items() if k != "ok"}
+        return _resp(0, "ok", {"file_context": file_context})
 
     upload_id = new_upload_id()
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", filename)  # 防路径注入

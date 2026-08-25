@@ -78,7 +78,11 @@ def chat_with_image(system: str, user_text: str, image_base64: str,
                 ],
                 max_tokens=max_tokens,
             )
-            return (resp.choices[0].message.content or "").strip() or fallback
+            content = (resp.choices[0].message.content or "").strip()
+            if content:
+                return content
+            # vision-exp 推理链偶尔把 max_tokens 预算烧完导致正文为空（finish_reason=length），重试一次
+            continue
         except Exception:
             continue
     return fallback

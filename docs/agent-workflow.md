@@ -121,9 +121,11 @@
 智能助手支持上传文件参与对话，规则如下：
 
 1. **文件类型**：图片（jpg/png/gif/webp）、PDF、Word(docx)、TXT/MD。图片直接走 vision 模型识别；PDF/Word/TXT 由 `file_parser.py` 提取文本后注入 prompt。
-2. **图片问答**：`file_context.type=image` 时，跳过本地/联网检索阶梯，直接调用 `llm.chat_with_image` 识别图片内容并回答。steps 中记录"图片识别"。
-3. **文本文件问答**：`file_context.type=text` 时，文件内容（截断 1500 字）注入问题文本，正常走本地→联网→通用阶梯。steps 中记录"已接收并解析上传文件"。
-4. **文件上下文记忆**：`state["last_file"]` 保存最近一次的文件上下文，跨轮次指代消息（"这个图怎么接"）可沿用。
-5. **上传即肯定**：用户上传资料后，系统返回鼓励文案（`services._UPLOAD_THANKS`），不立即并入知识库。
-6. **管理员审核**：上传资料默认 `pending` 状态，管理员在管理台审核通过后，内容转为 `tip` 类型知识卡片（`KC-UPLOAD-` 前缀）并同步向量库；驳回则标记 `rejected` 并记录理由。
-7. **MCP 封装**：文件解析与审核能力通过 `file-mcp`（`mcp_servers/file_server.py`）暴露为工具，编排引擎可按需调用。
+2. **附件即问题主体，跳过意图识别与澄清**：带 `file_context` 的新提问（非澄清补充）由 `_file_answer` 直接处理，不再反问"是哪个物料"——"这是什么"+图片应立即识别回答。回答用 `_FILE_ROLE`/`_FILE_FORMAT`（识别定位格式），不套排障报告。
+3. **图片问答**：`file_context.type=image` 时，跳过本地/联网检索阶梯，直接调用 `llm.chat_with_image` 识别图片内容并回答。steps 中记录"图片识别"。
+4. **文本文件问答**：`file_context.type=text` 时，文件内容（截断 1500 字）注入问题文本，正常走本地→联网→通用阶梯。steps 中记录"已接收并解析上传文件"。
+5. **对话附件 ≠ 投稿**：对话里带附件只调 `POST /api/uploads`（`purpose=chat`）做解析，不落库、不进资料审核队列、不弹"感谢分享"提示；只有物料详情页的"上传资料"按钮走 `purpose=review` 进入审核队列。
+6. **文件上下文记忆**：`state["last_file"]` 保存最近一次的文件上下文，跨轮次指代消息（"这个图怎么接"）可沿用。
+7. **上传即肯定**：用户通过"上传资料"投稿后，系统返回鼓励文案（`services._UPLOAD_THANKS`），不立即并入知识库。
+8. **管理员审核**：投稿资料默认 `pending` 状态，管理员在管理台审核通过后，内容转为 `tip` 类型知识卡片（`KC-UPLOAD-` 前缀）并同步向量库；驳回则标记 `rejected` 并记录理由。
+9. **MCP 封装**：文件解析与审核能力通过 `file-mcp`（`mcp_servers/file_server.py`）暴露为工具，编排引擎可按需调用。

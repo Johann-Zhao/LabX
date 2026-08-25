@@ -144,10 +144,12 @@ export async function login(userId, password) {
 // ---------- 文件上传与审核 ----------
 
 // 上传资料（图片/PDF/Word/TXT），需管理员审核后才并入知识库
-export async function uploadFile(userId, file, materialId = null) {
+export async function uploadFile(userId, file, materialId = null, purpose = 'review') {
   const formData = new FormData()
   formData.append('user_id', userId)
   if (materialId) formData.append('material_id', materialId)
+  // purpose=review 进资料审核队列；purpose=chat 仅解析返回 file_context（对话临时附件）
+  formData.append('purpose', purpose)
   formData.append('file', file)
   const { data } = await http.post('/uploads', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
