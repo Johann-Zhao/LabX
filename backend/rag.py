@@ -128,13 +128,16 @@ def _idf_score(query_feats: list[str], doc_text: str) -> float:
 
 
 def _unknown_tokens(question: str) -> set[str]:
-    """查询中库内完全不认识的型号词（字母开头的字母数字串，如 sg90、dht11）。
+    """查询中库内完全不认识的型号词（含数字的字母数字串，如 sg90、dht11、rv1126b）。
 
+    只认"含数字"的词：型号几乎都带数字，而 root/loader/txt 这类通用词若不过滤，
+    会用子串误命中无关卡片（"loader" 撞上 "bootloader"）。
     中文按字二元进特征，不受此过滤影响——避免自然语言表述误杀（如"总是"）。
     """
     return {
         tok for tok in re.findall(r"[a-z][a-z0-9]*", question.lower())
-        if len(tok) >= 2 and _DF is not None and _DF.get(tok, 0) == 0
+        if len(tok) >= 2 and any(ch.isdigit() for ch in tok)
+        and _DF is not None and _DF.get(tok, 0) == 0
     }
 
 

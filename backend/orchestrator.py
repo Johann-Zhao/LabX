@@ -58,7 +58,8 @@ _FOLLOWUP_WORDS = ("它", "这个", "那个", "这块", "那台", "这", "那", 
 # 投稿意图（对话内上传资料给知识库）：明确的投稿动词，或"上传+资料/文档类名词"组合
 # 注意排除排障场景的"代码上传失败"——单靠"上传"两个字不算投稿
 _CONTRIBUTE_WORDS = ("投稿", "分享给知识库", "放到知识库", "发到知识库", "存入知识库", "上传到知识库", "贡献资料")
-_CONTRIBUTE_NOUNS = ("资料", "文档", "手册", "参考", "笔记", "教程", "datasheet", "说明书")
+_CONTRIBUTE_NOUNS = ("资料", "文档", "手册", "参考", "笔记", "教程", "datasheet", "说明书",
+                     "数据库", "知识库", "社区")  # "那上传到你的数据库里吧" 也算
 
 
 def _is_contribute(message: str) -> bool:
@@ -847,8 +848,14 @@ def agent_chat(db, user_id: str, message: str, conv_id: str = "default", on_stat
             return _contribute(db, user_id, raw_message, [], on_status, file_context)
         return _file_answer(db, message, [], on_status, file_context)
 
-    # 无附件的投稿意图：引导用输入栏左侧回形针选择文件
+    # 投稿意图但本轮没带附件：沿用对话里最近上传的附件（"那上传到你的数据库里吧"）
     if not file_context and not state.get("pending") and _is_contribute(message):
+        last_file = state.get("last_file")
+        if last_file:
+            steps = [{"step": "上下文接续",
+                      "detail": f"沿用上一轮附件「{last_file.get('filename', '未命名')}」执行投稿"}]
+            return _contribute(db, user_id, message, steps, on_status or _noop_status, last_file)
+        # 对话里也没有附件：引导用输入栏左侧回形针选择文件
         return _resp(0, "ok", {
             "intent": "contribute",
             "steps": [{"step": "意图识别", "detail": "识别为「投稿资料」，但未检测到附件"}],
